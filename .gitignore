@@ -373,3 +373,8 @@ src/*.tex
 .agents
 PERFORMANCE_OPTIMIZATIONS.md
 TODO.md
+!out/.gitkeep
+!docs/.gitkeep
+!build/.gitkeep
+AGENTS.md
+CLAUDE.md
