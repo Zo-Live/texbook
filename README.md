@@ -8,7 +8,7 @@
 src/
   *.tex                      LaTeX 源文档
   latex_tools/               Python 包，用于 LLM 辅助 PDF 转 LaTeX
-docs/                        原始 PDF
+docs/                        原始 PDF（git 忽略）
 out/                         编译后的 PDF 输出（git 忽略）
 build/                       LaTeX 构建产物（git 忽略）
 ```
@@ -19,10 +19,26 @@ build/                       LaTeX 构建产物（git 忽略）
   ```bash
   sudo apt install texlive-xetex texlive-lang-chinese latexmk
   ```
-- Python 3.10+ 和 uv（当前开发验证环境使用 3.13）
-  ```bash
-  uv python install 3.13
-  ```
+- Python 3.10+（开发验证环境使用 3.13）
+
+## 安装
+
+推荐使用 [uv](https://docs.astral.sh/uv/)：
+
+```bash
+# 克隆后进入仓库根目录
+uv sync              # 安装项目依赖（含开发组）
+# 或
+uv pip install -e .  # 仅安装运行时依赖
+```
+
+也可以直接使用 pip：
+
+```bash
+pip install -e .
+```
+
+> 包源码位于 `src/latex_tools`，因此需要从仓库根目录以可编辑模式（`-e`）安装，才能正确使用 `latex-tools` 命令。
 
 ## 使用方法
 
