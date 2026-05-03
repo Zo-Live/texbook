@@ -29,6 +29,7 @@ def build_chunk_messages(
     chunk_index: int,
     total_chunks: int,
     previous_latex_tail: str = "",
+    extra_prompt: str = "",
 ) -> List[Dict[str, Any]]:
     """Build OpenAI-compatible chat messages for one PDF page chunk."""
     user_content: List[Dict[str, Any]] = [
@@ -64,8 +65,12 @@ def build_chunk_messages(
             }
         )
 
+    system_content = SYSTEM_PROMPT
+    if extra_prompt:
+        system_content += f"\n\n额外要求：{extra_prompt}"
+
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": user_content},
     ]
 

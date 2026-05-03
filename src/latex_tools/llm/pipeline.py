@@ -21,6 +21,7 @@ class LatexChunkClient(Protocol):
         chunk_index: int,
         total_chunks: int,
         previous_latex_tail: str = "",
+        extra_prompt: str = "",
     ) -> LLMChunkResult:
         """Generate LaTeX for one page chunk."""
 
@@ -43,6 +44,7 @@ class LLMPdfConverter:
         extractor: TextExtractor | None = None,
         chunk_pages: int = 4,
         image_dpi: int = 160,
+        extra_prompt: str = "",
     ):
         if chunk_pages <= 0:
             raise ValueError("chunk_pages must be positive.")
@@ -53,6 +55,7 @@ class LLMPdfConverter:
         self.extractor = extractor or TextExtractor()
         self.chunk_pages = chunk_pages
         self.image_dpi = image_dpi
+        self.extra_prompt = extra_prompt
         self.document_builder = LatexConverter()
 
     def convert(
@@ -82,6 +85,7 @@ class LLMPdfConverter:
                 chunk_index=index,
                 total_chunks=len(chunks),
                 previous_latex_tail=previous_latex_tail,
+                extra_prompt=self.extra_prompt,
             )
             fragments.append(result.latex)
             notes.extend(result.notes)

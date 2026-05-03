@@ -57,6 +57,7 @@ class OpenAICompatibleClient:
         chunk_index: int,
         total_chunks: int,
         previous_latex_tail: str = "",
+        extra_prompt: str = "",
     ) -> LLMChunkResult:
         messages = build_chunk_messages(
             document_title=document_title,
@@ -64,6 +65,7 @@ class OpenAICompatibleClient:
             chunk_index=chunk_index,
             total_chunks=total_chunks,
             previous_latex_tail=previous_latex_tail,
+            extra_prompt=extra_prompt,
         )
         request_kwargs = {
             "model": self.config.model,

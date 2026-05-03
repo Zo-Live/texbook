@@ -97,6 +97,7 @@ def _build_converter(
     max_tokens: int,
     chunk_pages: int,
     image_dpi: int,
+    extra_prompt: Optional[str] = None,
     client: Optional[OpenAICompatibleClient] = None,
 ) -> LLMPdfConverter:
     try:
@@ -116,6 +117,7 @@ def _build_converter(
         llm_client,
         chunk_pages=chunk_pages,
         image_dpi=image_dpi,
+        extra_prompt=extra_prompt or "",
     )
 
 
@@ -166,6 +168,9 @@ def extract(
     image_dpi: int = typer.Option(
         160, "--image-dpi", help="Render DPI for page images"
     ),
+    extra_prompt: Optional[str] = typer.Option(
+        None, "--extra-prompt", help="额外的系统提示文字（追加到默认要求之后）"
+    ),
 ):
     """Extract content from a single PDF and convert to LaTeX."""
     pdf_path = _resolve_existing_path(pdf_path)
@@ -181,6 +186,7 @@ def extract(
         max_tokens=max_tokens,
         chunk_pages=chunk_pages,
         image_dpi=image_dpi,
+        extra_prompt=extra_prompt,
     )
     result = converter.convert(pdf_path, pages=_parse_pages(pages))
     latex = result.latex
@@ -245,6 +251,9 @@ def batch(
     image_dpi: int = typer.Option(
         160, "--image-dpi", help="Render DPI for page images"
     ),
+    extra_prompt: Optional[str] = typer.Option(
+        None, "--extra-prompt", help="额外的系统提示文字（追加到默认要求之后）"
+    ),
 ):
     """Extract all matching PDFs in a directory to individual .tex files."""
     directory = _resolve_existing_path(directory)
@@ -260,6 +269,7 @@ def batch(
         max_tokens=max_tokens,
         chunk_pages=chunk_pages,
         image_dpi=image_dpi,
+        extra_prompt=extra_prompt,
     )
     output_dir = _resolve_output_dir(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

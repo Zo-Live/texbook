@@ -60,6 +60,7 @@ Python 包入口是 `latex-tools`，定义在 `pyproject.toml`。
 ```bash
 uv run latex-tools extract "docs/6.1 集合与映射.pdf"
 uv run latex-tools extract "docs/6.1 集合与映射.pdf" -o "src/6.1 集合与映射.tex"
+uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 7 --extra-prompt "只提取数学公式，忽略其他文字"
 uv run latex-tools batch docs/ -o src/
 ```
 
