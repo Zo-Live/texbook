@@ -70,6 +70,15 @@ uv run latex-tools batch docs/ -o src/
 - `extract -o` 的相对路径按仓库根目录解析；只给文件名时默认写入 `src/`。
 - `batch docs/ -o src/` 会把 `docs/` 下的 PDF 转成同名 `.tex` 并写入 `src/`。
 
+常用参数：
+
+- `--chunk-pages` 控制每次发送给 LLM 的页数，默认 `4`。
+- `--image-dpi` 控制页面图像渲染精度，默认 `160`。
+- `--image-dpi-min`、`--image-dpi-max` 控制 `auto` 图片模式的自适应 DPI 范围。
+- `--image-format` 支持 `png`、`jpeg`、`jpg`、`auto`。
+- `--jpeg-quality` 控制 JPEG 图像质量，默认 `85`。
+- `--prefetch-chunks` 控制预渲染的后续 chunk 数，默认 `1`；LLM 请求仍保持顺序发送。
+
 断点续传缓存：
 
 - CLI 默认启用 chunk 级缓存，目录为 `build/.latex_tools_cache/`。

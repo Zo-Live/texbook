@@ -19,7 +19,7 @@ build/                       LaTeX 构建产物（git 忽略）
   ```bash
   sudo apt install texlive-xetex texlive-lang-chinese latexmk
   ```
-- Python 3.13+ 和 uv
+- Python 3.10+ 和 uv（当前开发验证环境使用 3.13）
   ```bash
   uv python install 3.13
   ```
@@ -59,10 +59,10 @@ export LATEX_TOOLS_LLM_BASE_URL="https://your-api.example/v1"
 uv run latex-tools extract "docs/6.1 集合与映射.pdf"
 
 # 单文件输出到指定文件
-uv run latex-tools extract "docs/6.1 集合与映射.pdf" -o "src/6.1集合与映射.tex"
+uv run latex-tools extract "docs/6.1 集合与映射.pdf" -o "src/6.1 集合与映射.tex"
 
 # 只转换部分页面
-uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 1,3-6 -o "src/6.1集合与映射.tex"
+uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 1,3-6 -o "src/6.1 集合与映射.tex"
 
 # 追加自定义要求，例如只提取数学公式
 uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 7  -o "src/extra.tex"\
@@ -78,7 +78,15 @@ uv run latex-tools batch docs/ -o src/
 - `--extra-prompt` 追加到默认 system prompt 后的自定义要求，可用于指定提取内容类型、格式偏好等。
 - `--chunk-pages` 控制每次发送给 LLM 的页数，默认 `4`。
 - `--image-dpi` 控制页面图像渲染精度，默认 `160`。
+- `--image-dpi-min`、`--image-dpi-max` 控制 `auto` 图片模式的自适应 DPI 范围。
+- `--image-format` 控制页面图像格式，支持 `png`、`jpeg`、`jpg`、`auto`。
+- `--jpeg-quality` 控制 JPEG 图像质量，默认 `85`。
+- `--prefetch-chunks` 控制预渲染的后续 chunk 数，默认 `1`；LLM 请求仍保持顺序发送。
+- `--cache-dir` 指定断点续传缓存目录，默认 `build/.latex_tools_cache/`。
+- `--no-cache` 禁用 chunk 缓存；`--clear-cache` 清理当前 PDF 和参数对应的缓存后再转换。
 - 使用的模型需要支持图片输入；否则数学公式和版面还原质量会明显下降。
+
+断点续传缓存默认启用。相同 PDF、页码和转换参数重跑时会复用已完成 chunk；中途失败后再次运行可从已完成 chunk 继续。
 
 ## 开发
 

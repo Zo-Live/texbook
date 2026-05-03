@@ -3,7 +3,7 @@ name = "latex-tools"
 version = "0.1.0"
 description = "PDF extraction and LaTeX conversion for Chinese math lecture notes"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.27.0",
     "openai>=1.0.0",
