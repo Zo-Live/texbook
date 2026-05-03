@@ -2,23 +2,14 @@
 
 一个混合 LaTeX + Python 的仓库，用于中文数学讲义。
 
-## 目录结构
-
-```
-src/
-  *.tex                      LaTeX 源文档
-  latex_tools/               Python 包，用于 LLM 辅助 PDF 转 LaTeX
-docs/                        原始 PDF（git 忽略）
-out/                         编译后的 PDF 输出（git 忽略）
-build/                       LaTeX 构建产物（git 忽略）
-```
-
 ## 环境要求
 
 - TeX Live（需包含 xelatex、ctex 和 latexmk）
+
   ```bash
   sudo apt install texlive-xetex texlive-lang-chinese latexmk
   ```
+
 - Python 3.10+（开发验证环境使用 3.13）
 
 ## 安装
@@ -63,10 +54,10 @@ latexmk src/test.tex
 ```bash
 export LATEX_TOOLS_LLM_MODEL="your-vision-model"
 export LATEX_TOOLS_LLM_API_KEY="your-api-key"
-
-# 如使用第三方或自建 OpenAI-compatible 服务，再配置：
 export LATEX_TOOLS_LLM_BASE_URL="https://your-api.example/v1"
 ```
+
+> 建议写进 Shell 的配置文件。
 
 常用命令：
 
@@ -75,18 +66,20 @@ export LATEX_TOOLS_LLM_BASE_URL="https://your-api.example/v1"
 uv run latex-tools extract "docs/6.1 集合与映射.pdf"
 
 # 单文件输出到指定文件
-uv run latex-tools extract "docs/6.1 集合与映射.pdf" -o "src/6.1 集合与映射.tex"
+uv run latex-tools extract "docs/6.1 集合与映射.pdf" -o "src/6.1集合与映射.tex"
 
 # 只转换部分页面
-uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 1,3-6 -o "src/6.1 集合与映射.tex"
+uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 1,3-6 -o "src/部分页面.tex"
 
 # 追加自定义要求，例如只提取数学公式
-uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 7  -o "src/extra.tex"\
+uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 7  -o "src/公式.tex"\
   --extra-prompt "只提取数学公式，忽略其他文字"
 
 # 批量转换 docs/ 目录下所有 PDF
 uv run latex-tools batch docs/ -o src/
 ```
+
+> 输出文件名中不要包含空格，以免被错误解析为多个文件。
 
 可选参数：
 
@@ -104,6 +97,48 @@ uv run latex-tools batch docs/ -o src/
 
 断点续传缓存默认启用。相同 PDF、页码和转换参数重跑时会复用已完成 chunk；中途失败后再次运行可从已完成 chunk 继续。
 
+## 项目结构
+
+```text
+.
+├─ .gitignore
+├─ .latexmkrc                     LaTeX 编译配置
+├─ .python-version                Python 版本声明
+├─ pyproject.toml                 Python 项目配置与依赖
+├─ uv.lock                        uv 锁定文件
+├─ scripts/
+│  └─ post-build.sh               构建产物归位脚本
+├─ src/
+│  ├─ .latexmkrc                  自动加载根目录 .latexmkrc
+│  └─ latex_tools/                Python 包：LLM 辅助 PDF 转 LaTeX
+│     ├─ __init__.py
+│     ├─ cli.py                   命令行入口（latex-tools）
+│     ├─ convert/
+│     │  ├─ __init__.py
+│     │  └─ latex_converter.py    LaTeX 文档外壳组装与输出
+│     ├─ extract/
+│     │  ├─ __init__.py
+│     │  ├─ base.py               PDF 页级信息提取基类
+│     │  └─ text_extractor.py     文本、位置、字号与图像提取
+│     └─ llm/
+│        ├─ __init__.py
+│        ├─ cache.py              断点续传缓存
+│        ├─ client.py             OpenAI-compatible API 客户端
+│        ├─ config.py             LLM 模型与密钥配置
+│        ├─ pipeline.py           分 chunk 转换流水线
+│        └─ prompts.py            系统提示词模板
+├─ tests/                         单元测试
+│  ├─ conftest.py
+│  ├─ test_cli_helpers.py
+│  ├─ test_latex_converter.py
+│  ├─ test_llm_client.py
+│  ├─ test_llm_pipeline.py
+│  └─ test_text_extractor.py
+├─ docs/                          原始 PDF（git 忽略）
+├─ out/                           编译后的 PDF 输出（git 忽略）
+└─ build/                         LaTeX 构建产物（git 忽略）
+```
+
 ## 开发
 
 ```bash
@@ -111,3 +146,7 @@ uv sync --group dev
 uv run pytest
 uv run ruff check
 ```
+
+## 许可证
+
+MIT
