@@ -59,10 +59,10 @@ export LATEX_TOOLS_LLM_BASE_URL="https://your-api.example/v1"
 uv run latex-tools extract "docs/6.1 集合与映射.pdf"
 
 # 单文件输出到指定文件
-uv run latex-tools extract "docs/6.1 集合与映射.pdf" -o "src/6.1 集合与映射.tex"
+uv run latex-tools extract "docs/6.1 集合与映射.pdf" -o "src/6.1集合与映射.tex"
 
 # 只转换部分页面
-uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 1,3-6 -o "src/6.1 集合与映射.tex"
+uv run latex-tools extract "docs/6.1 集合与映射.pdf" --pages 1,3-6 -o "src/6.1集合与映射.tex"
 
 # 批量转换 docs/ 目录下所有 PDF
 uv run latex-tools batch docs/ -o src/
