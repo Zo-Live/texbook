@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from latex_tools.extract.base import PageTextBlock, PdfDocumentChunk, PdfPageContext
+from latex_tools.extract.base import (
+    ImageRenderOptions,
+    PageTextBlock,
+    PdfDocumentChunk,
+    PdfPageContext,
+)
 from latex_tools.llm.pipeline import LLMPdfConverter, _append_tail, _tail
 
 
@@ -24,6 +29,7 @@ class FakeExtractor:
         pages=None,
         image_dpi=160,
         include_images=True,
+        image_options=None,
         chunk_size=4,
     ):
         self.calls.append(
@@ -32,6 +38,7 @@ class FakeExtractor:
                 "pages": pages,
                 "image_dpi": image_dpi,
                 "include_images": include_images,
+                "image_options": image_options,
                 "chunk_size": chunk_size,
             }
         )
@@ -154,6 +161,8 @@ def test_pipeline_chunks_pages_and_builds_document():
     assert result.notes == ["chunk-1", "chunk-2"]
     assert extractor.calls[0]["image_dpi"] == 144
     assert extractor.calls[0]["chunk_size"] == 2
+    assert extractor.calls[0]["image_options"].dpi == 144
+    assert extractor.calls[0]["image_options"].image_format == "png"
     assert client.calls[0]["pages"] == [1, 2]
     assert client.calls[1]["pages"] == [3]
     assert client.calls[1]["previous_latex_tail"]
@@ -222,3 +231,27 @@ def test_pipeline_releases_chunk_images_when_client_fails():
         converter.convert(Path("docs/sample.pdf"))
 
     assert extractor.chunks[0].pages[0].image_base64 is None
+
+
+def test_pipeline_uses_custom_image_options():
+    pages = [PdfPageContext(page_number=1, width=1, height=1)]
+    image_options = ImageRenderOptions(
+        dpi=120,
+        dpi_min=90,
+        dpi_max=180,
+        image_format="auto",
+        jpeg_quality=92,
+    )
+    extractor = FakeExtractor(pages)
+    client = FakeClient()
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=1,
+        image_dpi=120,
+        image_options=image_options,
+    )
+
+    converter.convert(Path("docs/sample.pdf"))
+
+    assert extractor.calls[0]["image_options"] is image_options

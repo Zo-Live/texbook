@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Protocol, Sequence
 
 from ..convert.latex_converter import LatexConverter
-from ..extract.base import PdfPageContext
+from ..extract.base import ImageRenderOptions, PdfPageContext
 from ..extract.text_extractor import TextExtractor
 from .client import LLMChunkResult
 
@@ -44,6 +44,7 @@ class LLMPdfConverter:
         extractor: TextExtractor | None = None,
         chunk_pages: int = 4,
         image_dpi: int = 160,
+        image_options: ImageRenderOptions | None = None,
         extra_prompt: str = "",
     ):
         if chunk_pages <= 0:
@@ -55,6 +56,10 @@ class LLMPdfConverter:
         self.extractor = extractor or TextExtractor()
         self.chunk_pages = chunk_pages
         self.image_dpi = image_dpi
+        self.image_options = image_options or ImageRenderOptions(
+            dpi=image_dpi,
+            dpi_max=image_dpi,
+        )
         self.extra_prompt = extra_prompt
         self.document_builder = LatexConverter()
 
@@ -75,6 +80,7 @@ class LLMPdfConverter:
             pages=pages,
             image_dpi=self.image_dpi,
             include_images=True,
+            image_options=self.image_options,
             chunk_size=self.chunk_pages,
         ):
             if not saw_chunk:

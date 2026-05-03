@@ -73,6 +73,36 @@ class PdfDocumentChunk:
     pages: List[PdfPageContext] = field(default_factory=list)
 
 
+@dataclass
+class ImageRenderOptions:
+    """Options for rendering PDF pages to LLM-facing images."""
+
+    dpi: int = 160
+    dpi_min: int = 100
+    dpi_max: int = 160
+    image_format: str = "png"
+    jpeg_quality: int = 85
+
+    def __post_init__(self) -> None:
+        if self.dpi <= 0:
+            raise ValueError("image dpi must be positive.")
+        if self.dpi_min <= 0:
+            raise ValueError("image dpi min must be positive.")
+        if self.dpi_max <= 0:
+            raise ValueError("image dpi max must be positive.")
+        if self.dpi_min > self.dpi_max:
+            raise ValueError("image dpi min must be less than or equal to image dpi max.")
+        if not 1 <= self.jpeg_quality <= 100:
+            raise ValueError("jpeg quality must be between 1 and 100.")
+
+        normalized_format = self.image_format.lower()
+        if normalized_format == "jpg":
+            normalized_format = "jpeg"
+        if normalized_format not in {"png", "jpeg", "auto"}:
+            raise ValueError("image format must be png, jpeg, jpg, or auto.")
+        self.image_format = normalized_format
+
+
 class BaseExtractor(ABC):
     """Abstract base for all PDF extractors.
 

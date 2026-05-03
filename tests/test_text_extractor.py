@@ -1,10 +1,11 @@
 """Tests for text-layer page context extraction."""
 
 from pathlib import Path
+import base64
 
 import pymupdf
 
-from latex_tools.extract.base import PageTextBlock
+from latex_tools.extract.base import ImageRenderOptions, PageTextBlock
 from latex_tools.extract.text_extractor import TextExtractor
 
 
@@ -23,7 +24,7 @@ def test_iter_context_chunks_renders_only_selected_pages(tmp_path, monkeypatch):
     _write_blank_pdf(pdf_path, page_count=5)
     rendered_pages = []
 
-    def fake_render(self, page, image_dpi):
+    def fake_render(self, page, image_dpi, *, image_format="png", jpeg_quality=85):
         rendered_pages.append(page.number + 1)
         return f"image-{page.number + 1}-{image_dpi}"
 
@@ -58,6 +59,31 @@ def test_iter_context_chunks_renders_only_selected_pages(tmp_path, monkeypatch):
     assert chunks[1].pages[0].text_blocks[0].text == "page-5"
 
 
+def test_extract_context_supports_png_and_jpeg_rendering(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    _write_blank_pdf(pdf_path, page_count=1)
+    extractor = TextExtractor()
+
+    png_context = extractor.extract_context(
+        pdf_path,
+        pages=[1],
+        image_options=ImageRenderOptions(dpi=30, image_format="png"),
+    )
+    jpeg_context = extractor.extract_context(
+        pdf_path,
+        pages=[1],
+        image_options=ImageRenderOptions(dpi=30, image_format="jpeg"),
+    )
+
+    png_bytes = base64.b64decode(png_context.pages[0].image_base64)
+    jpeg_bytes = base64.b64decode(jpeg_context.pages[0].image_base64)
+
+    assert png_context.pages[0].image_mime_type == "image/png"
+    assert jpeg_context.pages[0].image_mime_type == "image/jpeg"
+    assert png_bytes.startswith(b"\x89PNG")
+    assert jpeg_bytes.startswith(b"\xff\xd8")
+
+
 def test_extract_context_keeps_existing_page_selection_behavior(tmp_path):
     pdf_path = tmp_path / "sample.pdf"
     _write_blank_pdf(pdf_path, page_count=4)
@@ -71,3 +97,25 @@ def test_extract_context_keeps_existing_page_selection_behavior(tmp_path):
     assert context.title == "sample"
     assert [page.page_number for page in context.pages] == [1, 3]
     assert all(page.image_base64 is None for page in context.pages)
+
+
+def test_auto_image_render_strategy_prefers_format_by_page_content():
+    extractor = TextExtractor()
+
+    class FakePage:
+        def __init__(self, images=None, drawings=None):
+            self._images = images or []
+            self._drawings = drawings or []
+
+        def get_images(self, full=False):
+            assert full is True
+            return self._images
+
+        def get_drawings(self):
+            return self._drawings
+
+    options = ImageRenderOptions(dpi_min=90, dpi_max=180, image_format="auto")
+
+    assert extractor._resolve_image_render(FakePage(), options) == (90, "png")
+    assert extractor._resolve_image_render(FakePage(images=[1]), options) == (180, "jpeg")
+    assert extractor._resolve_image_render(FakePage(drawings=[1]), options) == (180, "png")

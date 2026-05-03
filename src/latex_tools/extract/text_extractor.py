@@ -11,6 +11,7 @@ from .base import (
     BaseExtractor,
     ContentBlock,
     ExtractedContent,
+    ImageRenderOptions,
     PdfDocumentChunk,
     PageTextBlock,
     PdfDocumentContext,
@@ -52,6 +53,7 @@ class TextExtractor(BaseExtractor):
         pages: Optional[Sequence[int]] = None,
         image_dpi: int = 160,
         include_images: bool = True,
+        image_options: ImageRenderOptions | None = None,
     ) -> PdfDocumentContext:
         """Extract page-level context for the LLM conversion pipeline.
 
@@ -64,6 +66,7 @@ class TextExtractor(BaseExtractor):
             pages=pages,
             image_dpi=image_dpi,
             include_images=include_images,
+            image_options=image_options,
             chunk_size=1,
         ):
             page_contexts.extend(chunk.pages)
@@ -80,11 +83,13 @@ class TextExtractor(BaseExtractor):
         pages: Optional[Sequence[int]] = None,
         image_dpi: int = 160,
         include_images: bool = True,
+        image_options: ImageRenderOptions | None = None,
         chunk_size: int = 4,
     ) -> Iterable[PdfDocumentChunk]:
         """Yield page-level context in chunks for the LLM conversion pipeline."""
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive.")
+        resolved_image_options = self._resolve_image_options(image_dpi, image_options)
 
         doc = pymupdf.open(pdf_path)
         try:
@@ -98,7 +103,7 @@ class TextExtractor(BaseExtractor):
                 chunk_pages.append(
                     self._extract_page_context(
                         page,
-                        image_dpi=image_dpi,
+                        image_options=resolved_image_options,
                         include_images=include_images,
                     )
                 )
@@ -142,12 +147,20 @@ class TextExtractor(BaseExtractor):
         self,
         page: pymupdf.Page,
         *,
-        image_dpi: int,
+        image_options: ImageRenderOptions,
         include_images: bool,
     ) -> PdfPageContext:
         image_base64 = None
+        image_mime_type = "image/png"
         if include_images:
-            image_base64 = self._render_page_base64(page, image_dpi)
+            render_dpi, image_format = self._resolve_image_render(page, image_options)
+            image_base64 = self._render_page_base64(
+                page,
+                render_dpi,
+                image_format=image_format,
+                jpeg_quality=image_options.jpeg_quality,
+            )
+            image_mime_type = self._image_mime_type(image_format)
 
         rect = page.rect
         return PdfPageContext(
@@ -156,7 +169,31 @@ class TextExtractor(BaseExtractor):
             height=rect.height,
             text_blocks=self._extract_page_text_blocks(page),
             image_base64=image_base64,
+            image_mime_type=image_mime_type,
         )
+
+    def _resolve_image_options(
+        self,
+        image_dpi: int,
+        image_options: ImageRenderOptions | None,
+    ) -> ImageRenderOptions:
+        if image_options is not None:
+            return image_options
+        return ImageRenderOptions(dpi=image_dpi, dpi_max=image_dpi)
+
+    def _resolve_image_render(
+        self,
+        page: pymupdf.Page,
+        image_options: ImageRenderOptions,
+    ) -> tuple[int, str]:
+        if image_options.image_format in {"png", "jpeg"}:
+            return image_options.dpi, image_options.image_format
+
+        if page.get_images(full=True):
+            return image_options.dpi_max, "jpeg"
+        if page.get_drawings():
+            return image_options.dpi_max, "png"
+        return image_options.dpi_min, "png"
 
     def _extract_page_text_blocks(self, page: pymupdf.Page) -> List[PageTextBlock]:
         text_dict = page.get_text("dict")
@@ -193,11 +230,25 @@ class TextExtractor(BaseExtractor):
         sizes = [float(span.get("size", 12)) for span in spans]
         return max(sizes, default=12.0)
 
-    def _render_page_base64(self, page: pymupdf.Page, image_dpi: int) -> str:
+    def _render_page_base64(
+        self,
+        page: pymupdf.Page,
+        image_dpi: int,
+        *,
+        image_format: str = "png",
+        jpeg_quality: int = 85,
+    ) -> str:
         zoom = image_dpi / 72
         matrix = pymupdf.Matrix(zoom, zoom)
         pixmap = page.get_pixmap(matrix=matrix, alpha=False)
-        return base64.b64encode(pixmap.tobytes("png")).decode("ascii")
+        return base64.b64encode(
+            pixmap.tobytes(image_format, jpg_quality=jpeg_quality)
+        ).decode("ascii")
+
+    def _image_mime_type(self, image_format: str) -> str:
+        if image_format == "jpeg":
+            return "image/jpeg"
+        return "image/png"
 
     def _clean_text(self, text: str) -> str:
         return "".join(

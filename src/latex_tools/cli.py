@@ -5,6 +5,7 @@ from typing import Optional
 
 import typer
 
+from .extract.base import ImageRenderOptions
 from .llm.client import OpenAICompatibleClient
 from .llm.config import LLMConfig, LLMConfigError
 from .llm.pipeline import LLMPdfConverter
@@ -97,6 +98,10 @@ def _build_converter(
     max_tokens: int,
     chunk_pages: int,
     image_dpi: int,
+    image_dpi_min: int = 100,
+    image_dpi_max: Optional[int] = None,
+    image_format: str = "png",
+    jpeg_quality: int = 85,
     extra_prompt: Optional[str] = None,
     client: Optional[OpenAICompatibleClient] = None,
 ) -> LLMPdfConverter:
@@ -109,7 +114,14 @@ def _build_converter(
             timeout=timeout,
             max_tokens=max_tokens,
         )
-    except LLMConfigError as exc:
+        image_options = ImageRenderOptions(
+            dpi=image_dpi,
+            dpi_min=image_dpi_min,
+            dpi_max=image_dpi if image_dpi_max is None else image_dpi_max,
+            image_format=image_format,
+            jpeg_quality=jpeg_quality,
+        )
+    except (LLMConfigError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
     llm_client = client or OpenAICompatibleClient(config)
@@ -117,6 +129,7 @@ def _build_converter(
         llm_client,
         chunk_pages=chunk_pages,
         image_dpi=image_dpi,
+        image_options=image_options,
         extra_prompt=extra_prompt or "",
     )
 
@@ -168,6 +181,20 @@ def extract(
     image_dpi: int = typer.Option(
         160, "--image-dpi", help="Render DPI for page images"
     ),
+    image_dpi_min: int = typer.Option(
+        100, "--image-dpi-min", help="Minimum render DPI for auto image mode"
+    ),
+    image_dpi_max: Optional[int] = typer.Option(
+        None,
+        "--image-dpi-max",
+        help="Maximum render DPI for auto image mode (default: --image-dpi)",
+    ),
+    image_format: str = typer.Option(
+        "png", "--image-format", help="Image format: png, jpeg, jpg, or auto"
+    ),
+    jpeg_quality: int = typer.Option(
+        85, "--jpeg-quality", help="JPEG quality for rendered page images"
+    ),
     extra_prompt: Optional[str] = typer.Option(
         None, "--extra-prompt", help="额外的系统提示文字（追加到默认要求之后）"
     ),
@@ -186,6 +213,10 @@ def extract(
         max_tokens=max_tokens,
         chunk_pages=chunk_pages,
         image_dpi=image_dpi,
+        image_dpi_min=image_dpi_min,
+        image_dpi_max=image_dpi_max,
+        image_format=image_format,
+        jpeg_quality=jpeg_quality,
         extra_prompt=extra_prompt,
     )
     result = converter.convert(pdf_path, pages=_parse_pages(pages))
@@ -251,6 +282,20 @@ def batch(
     image_dpi: int = typer.Option(
         160, "--image-dpi", help="Render DPI for page images"
     ),
+    image_dpi_min: int = typer.Option(
+        100, "--image-dpi-min", help="Minimum render DPI for auto image mode"
+    ),
+    image_dpi_max: Optional[int] = typer.Option(
+        None,
+        "--image-dpi-max",
+        help="Maximum render DPI for auto image mode (default: --image-dpi)",
+    ),
+    image_format: str = typer.Option(
+        "png", "--image-format", help="Image format: png, jpeg, jpg, or auto"
+    ),
+    jpeg_quality: int = typer.Option(
+        85, "--jpeg-quality", help="JPEG quality for rendered page images"
+    ),
     extra_prompt: Optional[str] = typer.Option(
         None, "--extra-prompt", help="额外的系统提示文字（追加到默认要求之后）"
     ),
@@ -269,6 +314,10 @@ def batch(
         max_tokens=max_tokens,
         chunk_pages=chunk_pages,
         image_dpi=image_dpi,
+        image_dpi_min=image_dpi_min,
+        image_dpi_max=image_dpi_max,
+        image_format=image_format,
+        jpeg_quality=jpeg_quality,
         extra_prompt=extra_prompt,
     )
     output_dir = _resolve_output_dir(output_dir)
