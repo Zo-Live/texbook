@@ -94,6 +94,7 @@ def _build_converter(
     base_url: Optional[str],
     temperature: float,
     timeout: float,
+    max_tokens: int,
     chunk_pages: int,
     image_dpi: int,
     client: Optional[OpenAICompatibleClient] = None,
@@ -105,6 +106,7 @@ def _build_converter(
             base_url=base_url,
             temperature=temperature,
             timeout=timeout,
+            max_tokens=max_tokens,
         )
     except LLMConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -154,7 +156,10 @@ def extract(
     temperature: float = typer.Option(
         1.0, "--temperature", help="Sampling temperature"
     ),
-    timeout: float = typer.Option(120.0, "--timeout", help="LLM request timeout"),
+    timeout: float = typer.Option(600.0, "--timeout", help="LLM request read timeout (seconds)"),
+    max_tokens: int = typer.Option(
+        128000, "--max-tokens", help="Maximum tokens in LLM response"
+    ),
     chunk_pages: int = typer.Option(
         4, "--chunk-pages", help="Number of pages per LLM request"
     ),
@@ -173,6 +178,7 @@ def extract(
         base_url=base_url,
         temperature=temperature,
         timeout=timeout,
+        max_tokens=max_tokens,
         chunk_pages=chunk_pages,
         image_dpi=image_dpi,
     )
@@ -229,7 +235,10 @@ def batch(
     temperature: float = typer.Option(
         1.0, "--temperature", help="Sampling temperature"
     ),
-    timeout: float = typer.Option(120.0, "--timeout", help="LLM request timeout"),
+    timeout: float = typer.Option(600.0, "--timeout", help="LLM request read timeout (seconds)"),
+    max_tokens: int = typer.Option(
+        128000, "--max-tokens", help="Maximum tokens in LLM response"
+    ),
     chunk_pages: int = typer.Option(
         4, "--chunk-pages", help="Number of pages per LLM request"
     ),
@@ -248,6 +257,7 @@ def batch(
         base_url=base_url,
         temperature=temperature,
         timeout=timeout,
+        max_tokens=max_tokens,
         chunk_pages=chunk_pages,
         image_dpi=image_dpi,
     )

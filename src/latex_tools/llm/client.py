@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+import httpx
+
 from ..extract.base import PdfPageContext
 from .config import LLMConfig
 from .prompts import build_chunk_messages
@@ -36,7 +38,12 @@ class OpenAICompatibleClient:
 
         kwargs: dict[str, Any] = {
             "api_key": config.api_key,
-            "timeout": config.timeout,
+            "timeout": httpx.Timeout(
+                connect=30.0,
+                read=config.timeout,
+                write=120.0,
+                pool=30.0,
+            ),
         }
         if config.base_url:
             kwargs["base_url"] = config.base_url
@@ -62,6 +69,7 @@ class OpenAICompatibleClient:
             "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
         }
         try:
             response = self._create_completion(request_kwargs, response_format=True)

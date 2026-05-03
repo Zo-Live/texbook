@@ -17,7 +17,8 @@ class LLMConfig:
     api_key: str
     base_url: Optional[str] = None
     temperature: float = 1.0
-    timeout: float = 120.0
+    timeout: float = 600.0
+    max_tokens: int = 128000
 
     @classmethod
     def from_values(
@@ -27,7 +28,8 @@ class LLMConfig:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         temperature: float = 1.0,
-        timeout: float = 120.0,
+        timeout: float = 600.0,
+        max_tokens: int = 128000,
     ) -> "LLMConfig":
         resolved_model = model or os.environ.get("LATEX_TOOLS_LLM_MODEL")
         resolved_api_key = api_key or os.environ.get("LATEX_TOOLS_LLM_API_KEY")
@@ -45,6 +47,8 @@ class LLMConfig:
             raise LLMConfigError("Temperature must be non-negative.")
         if timeout <= 0:
             raise LLMConfigError("Timeout must be positive.")
+        if max_tokens <= 0:
+            raise LLMConfigError("max_tokens must be positive.")
 
         return cls(
             model=resolved_model,
@@ -52,4 +56,5 @@ class LLMConfig:
             base_url=resolved_base_url,
             temperature=temperature,
             timeout=timeout,
+            max_tokens=max_tokens,
         )
