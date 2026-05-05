@@ -1,10 +1,13 @@
 """LLM-driven PDF to LaTeX conversion pipeline."""
 
+import sys
 from collections import deque
+from contextlib import contextmanager
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Iterator, Protocol, Sequence
+from threading import Event, Thread
+from typing import Iterable, Iterator, Protocol, Sequence, TextIO
 
 from ..convert.latex_converter import LatexConverter
 from ..extract.base import ImageRenderOptions, PdfDocumentChunk, PdfPageContext
@@ -51,6 +54,8 @@ class LLMPdfConverter:
         prefetch_chunks: int = 1,
         cache_options: ChunkCacheOptions | None = None,
         extra_prompt: str = "",
+        progress_stream: TextIO | None = None,
+        progress_interval: float = 0.1,
     ):
         if chunk_pages <= 0:
             raise ValueError("chunk_pages must be positive.")
@@ -72,6 +77,7 @@ class LLMPdfConverter:
             cache_options if cache_options is not None and cache_options.enabled else None
         )
         self.extra_prompt = extra_prompt
+        self.progress_spinner = _LlmWaitSpinner(progress_stream, progress_interval)
         self.document_builder = LatexConverter()
 
     def convert(
@@ -120,14 +126,19 @@ class LLMPdfConverter:
                         else None
                     )
                     if result is None:
-                        result = self.client.generate_latex_chunk(
-                            document_title=chunk.title,
-                            pages=chunk.pages,
-                            chunk_index=chunk.chunk_index,
-                            total_chunks=chunk.total_chunks,
-                            previous_latex_tail=previous_latex_tail,
-                            extra_prompt=self.extra_prompt,
+                        message = (
+                            f"Waiting for LLM chunk "
+                            f"{chunk.chunk_index}/{chunk.total_chunks}"
                         )
+                        with self.progress_spinner.spin(message):
+                            result = self.client.generate_latex_chunk(
+                                document_title=chunk.title,
+                                pages=chunk.pages,
+                                chunk_index=chunk.chunk_index,
+                                total_chunks=chunk.total_chunks,
+                                previous_latex_tail=previous_latex_tail,
+                                extra_prompt=self.extra_prompt,
+                            )
                         if cache_run is not None:
                             cache_run.write(chunk, previous_latex_tail, result)
                 finally:
@@ -186,6 +197,70 @@ def _append_tail(
 def _release_page_images(pages: Sequence[PdfPageContext]) -> None:
     for page in pages:
         page.image_base64 = None
+
+
+class _LlmWaitSpinner:
+    _frames = ("-", "/", "|", "\\")
+
+    def __init__(
+        self,
+        stream: TextIO | None = None,
+        interval: float = 0.1,
+    ):
+        self.stream = sys.stderr if stream is None else stream
+        self.interval = interval
+
+    @contextmanager
+    def spin(self, message: str) -> Iterator[None]:
+        if not self._should_show():
+            yield
+            return
+
+        stop_event = Event()
+        line_length = len(self._format_line(0, message))
+        if not self._write_line(self._format_line(0, message)):
+            yield
+            return
+
+        def update() -> None:
+            frame_index = 1
+            while not stop_event.wait(self.interval):
+                line = self._format_line(frame_index, message)
+                if not self._write_line(line):
+                    stop_event.set()
+                    return
+                frame_index += 1
+
+        thread = Thread(target=update, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop_event.set()
+            thread.join()
+            self._clear_line(line_length)
+
+    def _should_show(self) -> bool:
+        isatty = getattr(self.stream, "isatty", None)
+        return callable(isatty) and isatty() and self.interval > 0
+
+    def _format_line(self, frame_index: int, message: str) -> str:
+        return f"{self._frames[frame_index % len(self._frames)]} {message}"
+
+    def _write_line(self, line: str) -> bool:
+        try:
+            self.stream.write(f"\r{line}")
+            self.stream.flush()
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def _clear_line(self, line_length: int) -> None:
+        try:
+            self.stream.write(f"\r{' ' * line_length}\r")
+            self.stream.flush()
+        except (OSError, ValueError):
+            return
 
 
 def _iter_prefetched_chunks(

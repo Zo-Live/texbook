@@ -56,6 +56,23 @@ def test_build_converter_normalizes_image_options(tmp_path):
     assert converter.cache_options.clear is False
 
 
+def test_build_converter_accepts_unlimited_timeout(tmp_path):
+    converter = _build_converter(
+        model="test-model",
+        api_key="test-key",
+        base_url=None,
+        temperature=1.0,
+        timeout=None,
+        max_tokens=128,
+        chunk_pages=2,
+        image_dpi=144,
+        cache_dir=tmp_path / "cache",
+        client=DummyClient(),
+    )
+
+    assert converter.chunk_pages == 2
+
+
 def test_build_converter_supports_cache_controls(tmp_path):
     disabled = _build_converter(
         model="test-model",
@@ -162,5 +179,20 @@ def test_build_converter_rejects_invalid_image_settings():
             chunk_pages=2,
             image_dpi=144,
             prefetch_chunks=-1,
+            client=DummyClient(),
+        )
+
+
+def test_build_converter_rejects_non_positive_timeout():
+    with pytest.raises(typer.BadParameter, match="Timeout"):
+        _build_converter(
+            model="test-model",
+            api_key="test-key",
+            base_url=None,
+            temperature=1.0,
+            timeout=0,
+            max_tokens=128,
+            chunk_pages=2,
+            image_dpi=144,
             client=DummyClient(),
         )

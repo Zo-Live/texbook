@@ -95,7 +95,7 @@ def _build_converter(
     api_key: Optional[str],
     base_url: Optional[str],
     temperature: float,
-    timeout: float,
+    timeout: Optional[float],
     max_tokens: int,
     chunk_pages: int,
     image_dpi: int,
@@ -192,7 +192,11 @@ def extract(
     temperature: float = typer.Option(
         1.0, "--temperature", help="Sampling temperature"
     ),
-    timeout: float = typer.Option(600.0, "--timeout", help="LLM request read timeout (seconds)"),
+    timeout: Optional[float] = typer.Option(
+        None,
+        "--timeout",
+        help="LLM request read timeout in seconds (default: wait indefinitely)",
+    ),
     max_tokens: int = typer.Option(
         128000, "--max-tokens", help="Maximum tokens in LLM response"
     ),
@@ -315,7 +319,11 @@ def batch(
     temperature: float = typer.Option(
         1.0, "--temperature", help="Sampling temperature"
     ),
-    timeout: float = typer.Option(600.0, "--timeout", help="LLM request read timeout (seconds)"),
+    timeout: Optional[float] = typer.Option(
+        None,
+        "--timeout",
+        help="LLM request read timeout in seconds (default: wait indefinitely)",
+    ),
     max_tokens: int = typer.Option(
         128000, "--max-tokens", help="Maximum tokens in LLM response"
     ),

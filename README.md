@@ -84,6 +84,7 @@ uv run latex-tools batch docs/ -o src/
 可选参数：
 
 - `--model`、`--api-key`、`--base-url` 可覆盖环境变量。
+- `--timeout` 控制 LLM 响应读取超时秒数；默认不限制等待时间。
 - `--extra-prompt` 追加到默认 system prompt 后的自定义要求，可用于指定提取内容类型、格式偏好等。
 - `--chunk-pages` 控制每次发送给 LLM 的页数，默认 `4`。
 - `--image-dpi` 控制页面图像渲染精度，默认 `160`。
@@ -96,6 +97,8 @@ uv run latex-tools batch docs/ -o src/
 - 使用的模型需要支持图片输入；否则数学公式和版面还原质量会明显下降。
 
 断点续传缓存默认启用。相同 PDF、页码和转换参数重跑时会复用已完成 chunk；中途失败后再次运行可从已完成 chunk 继续。
+
+等待未命中缓存的 LLM chunk 时，交互式终端会在 stderr 显示 `-`、`/`、`|` 和反斜杠轮转的加载提示。stdout 仍只输出 LaTeX，便于继续重定向到 `.tex` 文件。
 
 ## 项目结构
 

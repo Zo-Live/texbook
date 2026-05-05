@@ -1,5 +1,6 @@
 """Tests for the LLM PDF conversion pipeline."""
 
+import io
 import json
 from pathlib import Path
 import threading
@@ -15,6 +16,7 @@ from latex_tools.extract.base import (
 from latex_tools.llm.cache import ChunkCacheOptions, ChunkCacheRun
 from latex_tools.llm.pipeline import (
     LLMPdfConverter,
+    _LlmWaitSpinner,
     _append_tail,
     _iter_prefetched_chunks,
     _tail,
@@ -143,6 +145,11 @@ class EventingExtractor(FakeExtractor):
             yield chunk
 
 
+class FakeTtyStream(io.StringIO):
+    def isatty(self):
+        return True
+
+
 def _chunk(index, page):
     return PdfDocumentChunk(
         source_file=Path("docs/sample.pdf"),
@@ -263,6 +270,53 @@ def test_pipeline_chunks_pages_and_builds_document():
     assert client.calls[1]["pages"] == [3]
     assert client.calls[1]["previous_latex_tail"]
     assert all(page.image_base64 is None for chunk in extractor.chunks for page in chunk.pages)
+
+
+def test_pipeline_shows_spinner_for_uncached_llm_chunk():
+    stream = FakeTtyStream()
+    pages = [PdfPageContext(page_number=1, width=1, height=1)]
+    extractor = FakeExtractor(pages)
+    client = FakeClient()
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=1,
+        progress_stream=stream,
+    )
+
+    converter.convert(Path("docs/sample.pdf"))
+
+    assert "- Waiting for LLM chunk 1/1" in stream.getvalue()
+
+
+def test_pipeline_skips_spinner_for_cached_chunk(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_options = ChunkCacheOptions(
+        cache_dir=tmp_path / "cache",
+        llm_model="test-model",
+    )
+    first_converter = LLMPdfConverter(
+        FakeClient(latex_fragments=["cached"]),
+        extractor=FakeExtractor([_page(1)]),
+        chunk_pages=1,
+        cache_options=cache_options,
+        progress_stream=io.StringIO(),
+    )
+    first_converter.convert(pdf_path)
+
+    stream = FakeTtyStream()
+    second_converter = LLMPdfConverter(
+        RaisingClient(),
+        extractor=FakeExtractor([_page(1)]),
+        chunk_pages=1,
+        cache_options=cache_options,
+        progress_stream=stream,
+    )
+
+    second_converter.convert(pdf_path)
+
+    assert stream.getvalue() == ""
 
 
 def test_pipeline_reuses_chunk_cache_after_successful_run(tmp_path):
@@ -701,3 +755,26 @@ def test_pipeline_supports_disabled_prefetch():
 def test_pipeline_rejects_negative_prefetch():
     with pytest.raises(ValueError, match="prefetch_chunks"):
         LLMPdfConverter(FakeClient(), prefetch_chunks=-1)
+
+
+def test_llm_wait_spinner_skips_non_tty_stream():
+    stream = io.StringIO()
+    spinner = _LlmWaitSpinner(stream)
+
+    with spinner.spin("Waiting for LLM chunk 1/1"):
+        pass
+
+    assert stream.getvalue() == ""
+
+
+def test_llm_wait_spinner_clears_line_after_error():
+    stream = FakeTtyStream()
+    spinner = _LlmWaitSpinner(stream)
+
+    with pytest.raises(RuntimeError, match="failed"):
+        with spinner.spin("Waiting for LLM chunk 1/1"):
+            raise RuntimeError("failed")
+
+    output = stream.getvalue()
+    assert "- Waiting for LLM chunk 1/1" in output
+    assert output.endswith("\r")

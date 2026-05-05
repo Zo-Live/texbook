@@ -1,7 +1,15 @@
 """Tests for LLM response parsing and prompt generation."""
 
+import sys
+from types import SimpleNamespace
+
 from latex_tools.extract.base import PageTextBlock, PdfPageContext
-from latex_tools.llm.client import LLMResponseError, parse_chunk_response
+from latex_tools.llm.client import (
+    LLMResponseError,
+    OpenAICompatibleClient,
+    parse_chunk_response,
+)
+from latex_tools.llm.config import LLMConfig
 from latex_tools.llm.prompts import build_chunk_messages
 
 
@@ -23,6 +31,45 @@ def test_parse_chunk_response_rejects_missing_latex():
         assert "latex" in str(exc)
     else:
         raise AssertionError("Expected LLMResponseError")
+
+
+def test_openai_client_uses_unlimited_read_timeout_by_default(monkeypatch):
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    OpenAICompatibleClient(
+        LLMConfig(
+            model="test-model",
+            api_key="test-key",
+        )
+    )
+
+    assert captured["timeout"].read is None
+
+
+def test_openai_client_uses_explicit_read_timeout(monkeypatch):
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    OpenAICompatibleClient(
+        LLMConfig(
+            model="test-model",
+            api_key="test-key",
+            timeout=10.0,
+        )
+    )
+
+    assert captured["timeout"].read == 10.0
 
 
 def test_build_chunk_messages_contains_page_text_and_image():
