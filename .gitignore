@@ -378,3 +378,4 @@ LaTeX.code-workspace
 !docs/.gitkeep
 !build/.gitkeep
 !out/.gitkeep
+project-output-architecture.md

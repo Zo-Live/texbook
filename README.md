@@ -1,6 +1,6 @@
 # LaTeX Tools
 
-一个混合 LaTeX + Python 的仓库，包含 LaTeX 编译工具与源码生成工具。
+一个混合 LaTeX + Python 的仓库，包含 LaTeX 编译工具与源码生成工具。目前适合单篇讲义或小型材料。
 
 ## 环境要求
 
