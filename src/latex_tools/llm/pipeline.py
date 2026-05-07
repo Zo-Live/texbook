@@ -15,6 +15,7 @@ from ..extract.base import ImageRenderOptions, PdfDocumentChunk, PdfPageContext
 from ..extract.text_extractor import TextExtractor
 from .cache import ChunkCacheOptions, ChunkCacheRun
 from .client import LLMChunkResult
+from .presets import PromptPreset, default_prompt_preset
 
 
 class LatexChunkClient(Protocol):
@@ -29,6 +30,7 @@ class LatexChunkClient(Protocol):
         total_chunks: int,
         previous_latex_tail: str = "",
         extra_prompt: str = "",
+        prompt_preset: PromptPreset | None = None,
     ) -> LLMChunkResult:
         """Generate LaTeX for one page chunk."""
 
@@ -38,6 +40,7 @@ class LatexChunkClient(Protocol):
         fallback_title: str,
         title_evidence: str,
         extra_prompt: str = "",
+        prompt_preset: PromptPreset | None = None,
     ) -> str:
         """Generate a document title from collected conversion evidence."""
 
@@ -64,6 +67,7 @@ class LLMPdfConverter:
         prefetch_chunks: int = 1,
         cache_options: ChunkCacheOptions | None = None,
         extra_prompt: str = "",
+        prompt_preset: PromptPreset | None = None,
         title_source: str = "filename",
         manual_title: str | None = None,
         show_date: bool = False,
@@ -100,6 +104,7 @@ class LLMPdfConverter:
             cache_options if cache_options is not None and cache_options.enabled else None
         )
         self.extra_prompt = extra_prompt
+        self.prompt_preset = prompt_preset or default_prompt_preset()
         self.title_source = title_source
         self.manual_title = resolved_manual_title
         self.show_date = show_date
@@ -149,6 +154,8 @@ class LLMPdfConverter:
                             image_dpi=self.image_dpi,
                             image_options=self.image_options,
                             extra_prompt=self.extra_prompt,
+                            prompt_preset=self.prompt_preset,
+                            title_source=self.title_source,
                         )
                 saw_chunk = True
                 try:
@@ -170,6 +177,7 @@ class LLMPdfConverter:
                                 total_chunks=chunk.total_chunks,
                                 previous_latex_tail=previous_latex_tail,
                                 extra_prompt=self.extra_prompt,
+                                prompt_preset=self.prompt_preset,
                             )
                         if cache_run is not None:
                             cache_run.write(chunk, previous_latex_tail, result)
@@ -225,6 +233,7 @@ class LLMPdfConverter:
                     fallback_title=fallback_title,
                     title_evidence=title_evidence,
                     extra_prompt=self.extra_prompt,
+                    prompt_preset=self.prompt_preset,
                 )
         except Exception:
             return fallback_title

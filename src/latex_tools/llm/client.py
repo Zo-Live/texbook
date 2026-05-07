@@ -10,6 +10,7 @@ import httpx
 from ..extract.base import PdfPageContext
 from .config import LLMConfig
 from .prompts import build_chunk_messages, build_title_messages
+from .presets import PromptPreset
 
 
 class LLMResponseError(RuntimeError):
@@ -58,6 +59,7 @@ class OpenAICompatibleClient:
         total_chunks: int,
         previous_latex_tail: str = "",
         extra_prompt: str = "",
+        prompt_preset: PromptPreset | None = None,
     ) -> LLMChunkResult:
         messages = build_chunk_messages(
             document_title=document_title,
@@ -66,6 +68,7 @@ class OpenAICompatibleClient:
             total_chunks=total_chunks,
             previous_latex_tail=previous_latex_tail,
             extra_prompt=extra_prompt,
+            prompt_preset=prompt_preset,
         )
         request_kwargs = {
             "model": self.config.model,
@@ -100,11 +103,13 @@ class OpenAICompatibleClient:
         fallback_title: str,
         title_evidence: str,
         extra_prompt: str = "",
+        prompt_preset: PromptPreset | None = None,
     ) -> str:
         messages = build_title_messages(
             fallback_title=fallback_title,
             title_evidence=title_evidence,
             extra_prompt=extra_prompt,
+            prompt_preset=prompt_preset,
         )
         request_kwargs = {
             "model": self.config.model,

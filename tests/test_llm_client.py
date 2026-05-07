@@ -12,6 +12,7 @@ from latex_tools.llm.client import (
 )
 from latex_tools.llm.config import LLMConfig
 from latex_tools.llm.prompts import build_chunk_messages, build_title_messages
+from latex_tools.llm.presets import PromptPreset, default_prompt_preset
 
 
 def test_parse_chunk_response_accepts_fenced_json():
@@ -132,3 +133,54 @@ def test_build_title_messages_contains_fallback_and_evidence():
     assert messages[1]["role"] == "user"
     assert "6.1 集合与映射" in messages[1]["content"]
     assert "\\section{集合}" in messages[1]["content"]
+
+
+def test_build_messages_use_custom_prompt_preset():
+    base = default_prompt_preset()
+    preset = PromptPreset(
+        name="custom-client",
+        description="Custom prompt",
+        version="1",
+        chunk_system_prompt="正文系统",
+        chunk_user_template="正文用户 {document_title}{pages_text}",
+        page_image_label_template="图像页 {page_number}",
+        title_system_prompt="标题系统",
+        title_user_template="标题用户 {fallback_title}\n{title_evidence}",
+        extra_prompt="预设额外",
+    )
+    page = PdfPageContext(
+        page_number=3,
+        width=1,
+        height=1,
+        text_blocks=[
+            PageTextBlock(
+                text="页面文本",
+                bbox=(0, 0, 1, 1),
+                font_size=12,
+            )
+        ],
+        image_base64="ZmFrZQ==",
+    )
+
+    chunk_messages = build_chunk_messages(
+        document_title="自定义标题",
+        pages=[page],
+        chunk_index=1,
+        total_chunks=1,
+        extra_prompt="运行额外",
+        prompt_preset=preset,
+    )
+    title_messages = build_title_messages(
+        fallback_title="文件名",
+        title_evidence="标题线索",
+        prompt_preset=preset,
+    )
+
+    assert base.name == "chinese-math"
+    assert "正文系统" in chunk_messages[0]["content"]
+    assert "预设额外" in chunk_messages[0]["content"]
+    assert "运行额外" in chunk_messages[0]["content"]
+    assert "正文用户 自定义标题" in chunk_messages[1]["content"][0]["text"]
+    assert "图像页 3" == chunk_messages[1]["content"][1]["text"]
+    assert title_messages[0]["content"].startswith("标题系统")
+    assert title_messages[1]["content"] == "标题用户 文件名\n标题线索"

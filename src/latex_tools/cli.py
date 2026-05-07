@@ -1,5 +1,6 @@
 """CLI entry point for latex-tools."""
 
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,15 @@ from .llm.cache import ChunkCacheOptions
 from .llm.client import OpenAICompatibleClient
 from .llm.config import LLMConfig, LLMConfigError
 from .llm.pipeline import LLMPdfConverter
+from .llm.presets import (
+    DEFAULT_PROMPT_PRESET_NAME,
+    PromptPreset,
+    PromptPresetError,
+    build_prompt_preset_from_inputs,
+    list_prompt_presets,
+    load_prompt_preset,
+    save_prompt_preset,
+)
 
 
 class TitleSource(str, Enum):
@@ -61,6 +71,8 @@ app = typer.Typer(
     name="latex-tools",
     help="Convert PDFs to LaTeX source using an LLM-assisted pipeline.",
 )
+presets_app = typer.Typer(help="Manage prompt presets.")
+app.add_typer(presets_app, name="presets")
 
 
 def _parse_pages(pages: Optional[str]) -> Optional[list[int]]:
@@ -116,6 +128,8 @@ def _build_converter(
     no_cache: bool = False,
     clear_cache: bool = False,
     extra_prompt: Optional[str] = None,
+    preset: str = DEFAULT_PROMPT_PRESET_NAME,
+    prompt_preset: Optional[PromptPreset] = None,
     title_source: TitleSource | str = TitleSource.filename,
     manual_title: Optional[str] = None,
     show_date: bool = False,
@@ -154,7 +168,11 @@ def _build_converter(
             raise ValueError("prefetch_chunks must be non-negative.")
         if no_cache and clear_cache:
             raise ValueError("--clear-cache cannot be used with --no-cache.")
-    except (LLMConfigError, ValueError) as exc:
+        resolved_prompt_preset = prompt_preset or load_prompt_preset(
+            preset,
+            repo_root=_repo_root(),
+        )
+    except (LLMConfigError, PromptPresetError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
     llm_client = client or OpenAICompatibleClient(config)
@@ -176,10 +194,129 @@ def _build_converter(
         prefetch_chunks=prefetch_chunks,
         cache_options=cache_options,
         extra_prompt=extra_prompt or "",
+        prompt_preset=resolved_prompt_preset,
         title_source=resolved_title_source,
         manual_title=resolved_manual_title,
         show_date=show_date,
     )
+
+
+def _load_cli_prompt_preset(name: str) -> PromptPreset:
+    try:
+        return load_prompt_preset(name, repo_root=_repo_root())
+    except PromptPresetError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@presets_app.command("list")
+def presets_list():
+    """List built-in and repository-local prompt presets."""
+    try:
+        items = list_prompt_presets(repo_root=_repo_root())
+    except PromptPresetError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    for item in items:
+        location = item.source
+        typer.echo(f"{item.preset.name}\t{location}\t{item.preset.description}")
+
+
+@presets_app.command("show")
+def presets_show(
+    name: str = typer.Argument(..., help="Prompt preset name"),
+):
+    """Show one prompt preset as JSON."""
+    preset = _load_cli_prompt_preset(name)
+    typer.echo(
+        json.dumps(
+            preset.to_dict(),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+@presets_app.command("add")
+def presets_add(
+    name: Optional[str] = typer.Option(
+        None,
+        "--name",
+        help="New preset name, e.g. chinese-math-lite",
+    ),
+    from_preset: str = typer.Option(
+        DEFAULT_PROMPT_PRESET_NAME,
+        "--from-preset",
+        help="Existing preset to copy before applying interactive instructions",
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Replace an existing repository-local preset with the same name",
+    ),
+):
+    """Interactively add a repository-local prompt preset."""
+    try:
+        base_preset = load_prompt_preset(from_preset, repo_root=_repo_root())
+    except PromptPresetError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo("创建 Prompt 预设。直接回车表示沿用当前基础预设。")
+    preset_name = (name or typer.prompt("预设名称（小写英文、数字、- 或 _）")).strip()
+    description = str(
+        typer.prompt(
+            "简短说明",
+            default=f"{base_preset.description} 自定义版",
+        )
+    ).strip()
+    chunk_rule = str(
+        typer.prompt(
+            "正文整理规则",
+            default="",
+            show_default=False,
+        )
+    ).strip()
+    chunk_context = str(
+        typer.prompt(
+            "分块输入说明",
+            default="",
+            show_default=False,
+        )
+    ).strip()
+    title_rule = str(
+        typer.prompt(
+            "标题生成规则",
+            default="",
+            show_default=False,
+        )
+    ).strip()
+    preset_extra = str(
+        typer.prompt(
+            "默认额外说明",
+            default="",
+            show_default=False,
+        )
+    ).strip()
+
+    try:
+        preset = build_prompt_preset_from_inputs(
+            name=preset_name,
+            description=description,
+            base_preset=base_preset,
+            chunk_rule=chunk_rule,
+            chunk_context=chunk_context,
+            title_rule=title_rule,
+            extra_prompt=preset_extra,
+        )
+        path = save_prompt_preset(
+            preset,
+            repo_root=_repo_root(),
+            overwrite=overwrite,
+        )
+    except PromptPresetError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo(f"已保存预设：{path}")
 
 
 @app.command()
@@ -212,6 +349,11 @@ def extract(
         False,
         "--show-date/--hide-date",
         help="Show \\today in the generated LaTeX title block",
+    ),
+    preset: str = typer.Option(
+        DEFAULT_PROMPT_PRESET_NAME,
+        "--preset",
+        help="Prompt preset name",
     ),
     model: Optional[str] = typer.Option(
         None,
@@ -308,6 +450,7 @@ def extract(
         no_cache=no_cache,
         clear_cache=clear_cache,
         extra_prompt=extra_prompt,
+        preset=preset,
         title_source=title_source,
         manual_title=title,
         show_date=show_date,
@@ -353,6 +496,11 @@ def batch(
         False,
         "--show-date/--hide-date",
         help="Show \\today in the generated LaTeX title block",
+    ),
+    preset: str = typer.Option(
+        DEFAULT_PROMPT_PRESET_NAME,
+        "--preset",
+        help="Prompt preset name",
     ),
     model: Optional[str] = typer.Option(
         None,
@@ -449,6 +597,7 @@ def batch(
         no_cache=no_cache,
         clear_cache=clear_cache,
         extra_prompt=extra_prompt,
+        preset=preset,
         title_source=title_source,
         show_date=show_date,
     )

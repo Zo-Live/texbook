@@ -2,13 +2,34 @@
 
 import pytest
 import typer
+from typer.testing import CliRunner
 
-from latex_tools.cli import TitleSource, _build_converter, _parse_pages
+from latex_tools import cli as cli_module
+from latex_tools.cli import TitleSource, _build_converter, _parse_pages, app
+from latex_tools.llm.presets import PromptPreset, default_prompt_preset
 
 
 class DummyClient:
     def generate_latex_chunk(self, **kwargs):
         raise AssertionError("Not used in converter construction test")
+
+
+runner = CliRunner()
+
+
+def _custom_preset():
+    base = default_prompt_preset()
+    return PromptPreset(
+        name="custom-cli",
+        description="Custom CLI preset",
+        version="1",
+        chunk_system_prompt=base.chunk_system_prompt,
+        chunk_user_template=base.chunk_user_template,
+        page_image_label_template=base.page_image_label_template,
+        title_system_prompt=base.title_system_prompt,
+        title_user_template=base.title_user_template,
+        extra_prompt="CLI preset extra",
+    )
 
 
 def test_parse_pages_accepts_ranges_and_deduplicates():
@@ -54,6 +75,7 @@ def test_build_converter_normalizes_image_options(tmp_path):
     assert converter.cache_options.cache_dir == tmp_path / "cache"
     assert converter.cache_options.llm_model == "test-model"
     assert converter.cache_options.clear is False
+    assert converter.prompt_preset.name == "chinese-math"
     assert converter.title_source == "filename"
     assert converter.manual_title is None
     assert converter.show_date is False
@@ -95,6 +117,42 @@ def test_build_converter_passes_title_and_date_options(tmp_path):
     )
 
     assert llm_converter.title_source == "llm"
+
+
+def test_build_converter_accepts_prompt_preset_object(tmp_path):
+    preset = _custom_preset()
+    converter = _build_converter(
+        model="test-model",
+        api_key="test-key",
+        base_url=None,
+        temperature=1.0,
+        timeout=10.0,
+        max_tokens=128,
+        chunk_pages=2,
+        image_dpi=144,
+        cache_dir=tmp_path / "cache",
+        prompt_preset=preset,
+        client=DummyClient(),
+    )
+
+    assert converter.prompt_preset is preset
+
+
+def test_build_converter_rejects_unknown_prompt_preset(tmp_path):
+    with pytest.raises(typer.BadParameter, match="Unknown prompt preset"):
+        _build_converter(
+            model="test-model",
+            api_key="test-key",
+            base_url=None,
+            temperature=1.0,
+            timeout=10.0,
+            max_tokens=128,
+            chunk_pages=2,
+            image_dpi=144,
+            cache_dir=tmp_path / "cache",
+            preset="missing-one",
+            client=DummyClient(),
+        )
 
 
 def test_build_converter_rejects_invalid_title_options(tmp_path):
@@ -270,3 +328,30 @@ def test_build_converter_rejects_non_positive_timeout():
             image_dpi=144,
             client=DummyClient(),
         )
+
+
+def test_presets_cli_lists_builtin_preset():
+    result = runner.invoke(app, ["presets", "list"])
+
+    assert result.exit_code == 0
+    assert "chinese-math" in result.output
+    assert "builtin" in result.output
+
+
+def test_presets_cli_adds_and_shows_repository_preset(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module, "_repo_root", lambda: tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["presets", "add", "--name", "custom-one"],
+        input="\n只保留证明\n\n标题短一些\n默认额外\n",
+    )
+    show_result = runner.invoke(app, ["presets", "show", "custom-one"])
+
+    assert result.exit_code == 0, result.output
+    assert show_result.exit_code == 0, show_result.output
+    assert "custom-one.json" in result.output
+    assert '"name": "custom-one"' in show_result.output
+    assert "只保留证明" in show_result.output
+    assert "标题短一些" in show_result.output
+    assert "默认额外" in show_result.output

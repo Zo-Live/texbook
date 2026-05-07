@@ -12,10 +12,11 @@ from typing import Any, Sequence
 
 from ..extract.base import ImageRenderOptions, PdfDocumentChunk
 from .client import LLMChunkResult
+from .presets import PromptPreset, default_prompt_preset
 
 
 CACHE_SCHEMA_VERSION = 1
-PROMPT_CACHE_VERSION = 1
+PROMPT_CACHE_VERSION = 2
 
 _HASH_CHUNK_SIZE = 1024 * 1024
 
@@ -50,9 +51,13 @@ class ChunkCacheRun:
         image_dpi: int,
         image_options: ImageRenderOptions,
         extra_prompt: str,
+        prompt_preset: PromptPreset | None = None,
+        title_source: str = "filename",
     ):
         self.options = options
         self.document_title = document_title
+        self.prompt_preset = prompt_preset or default_prompt_preset()
+        self.title_source = title_source
         self.run_key = _run_key(
             options=options,
             pdf_path=pdf_path,
@@ -62,6 +67,8 @@ class ChunkCacheRun:
             image_dpi=image_dpi,
             image_options=image_options,
             extra_prompt=extra_prompt,
+            prompt_preset=self.prompt_preset,
+            title_source=title_source,
         )
         self.run_dir = options.cache_dir / self.run_key
         if options.clear:
@@ -120,6 +127,10 @@ class ChunkCacheRun:
             "prompt_cache_version": PROMPT_CACHE_VERSION,
             "run_key": self.run_key,
             "document_title": self.document_title,
+            "title_source": self.title_source,
+            "prompt_preset_name": self.prompt_preset.name,
+            "prompt_preset_version": self.prompt_preset.version,
+            "prompt_preset_hash": self.prompt_preset.prompt_hash(),
             "chunk_index": chunk.chunk_index,
             "total_chunks": chunk.total_chunks,
             "page_numbers": _chunk_page_numbers(chunk),
@@ -171,6 +182,10 @@ class ChunkCacheRun:
             and data.get("prompt_cache_version") == PROMPT_CACHE_VERSION
             and data.get("run_key") == self.run_key
             and data.get("document_title") == self.document_title
+            and data.get("title_source") == self.title_source
+            and data.get("prompt_preset_name") == self.prompt_preset.name
+            and data.get("prompt_preset_version") == self.prompt_preset.version
+            and data.get("prompt_preset_hash") == self.prompt_preset.prompt_hash()
             and data.get("chunk_index") == chunk.chunk_index
             and data.get("total_chunks") == chunk.total_chunks
             and data.get("page_numbers") == _chunk_page_numbers(chunk)
@@ -189,17 +204,26 @@ def _run_key(
     image_dpi: int,
     image_options: ImageRenderOptions,
     extra_prompt: str,
+    prompt_preset: PromptPreset | None = None,
+    title_source: str = "filename",
 ) -> str:
+    resolved_prompt_preset = prompt_preset or default_prompt_preset()
     payload = {
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "prompt_cache_version": PROMPT_CACHE_VERSION,
         "pdf_sha256": _sha256_file(pdf_path),
         "document_title": document_title,
+        "title_source": title_source,
         "pages": _normalize_pages(pages),
         "chunk_pages": chunk_pages,
         "image_dpi": image_dpi,
         "image_options": _image_options_payload(image_options),
         "extra_prompt": extra_prompt,
+        "prompt_preset": {
+            "name": resolved_prompt_preset.name,
+            "version": resolved_prompt_preset.version,
+            "hash": resolved_prompt_preset.prompt_hash(),
+        },
         "llm": {
             "model": options.llm_model,
             "base_url": options.llm_base_url,

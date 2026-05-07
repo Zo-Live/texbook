@@ -21,6 +21,7 @@ from latex_tools.llm.pipeline import (
     _iter_prefetched_chunks,
     _tail,
 )
+from latex_tools.llm.presets import PromptPreset, default_prompt_preset
 
 
 class FakeExtractor:
@@ -95,6 +96,7 @@ class FakeClient:
         total_chunks,
         previous_latex_tail="",
         extra_prompt="",
+        prompt_preset=None,
     ):
         self.calls.append(
             {
@@ -104,6 +106,7 @@ class FakeClient:
                 "total_chunks": total_chunks,
                 "previous_latex_tail": previous_latex_tail,
                 "extra_prompt": extra_prompt,
+                "prompt_preset": prompt_preset,
             }
         )
         latex = (
@@ -126,12 +129,14 @@ class FakeClient:
         fallback_title,
         title_evidence,
         extra_prompt="",
+        prompt_preset=None,
     ):
         self.title_calls.append(
             {
                 "fallback_title": fallback_title,
                 "title_evidence": title_evidence,
                 "extra_prompt": extra_prompt,
+                "prompt_preset": prompt_preset,
             }
         )
         if self.title_exception is not None:
@@ -196,6 +201,21 @@ def _page(page_number, *, image_base64="image"):
     )
 
 
+def _custom_preset(name="custom-preset", *, suffix=""):
+    base = default_prompt_preset()
+    return PromptPreset(
+        name=name,
+        description="Custom preset",
+        version="1",
+        chunk_system_prompt=base.chunk_system_prompt + suffix,
+        chunk_user_template=base.chunk_user_template,
+        page_image_label_template=base.page_image_label_template,
+        title_system_prompt=base.title_system_prompt,
+        title_user_template=base.title_user_template,
+        extra_prompt=base.extra_prompt,
+    )
+
+
 def _build_cache_run(
     tmp_path,
     *,
@@ -209,6 +229,8 @@ def _build_cache_run(
     base_url=None,
     temperature=1.0,
     max_tokens=128000,
+    prompt_preset=None,
+    title_source="filename",
 ):
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_bytes(b"sample-pdf-bytes")
@@ -234,6 +256,8 @@ def _build_cache_run(
             jpeg_quality=85,
         ),
         extra_prompt=extra_prompt,
+        prompt_preset=prompt_preset,
+        title_source=title_source,
     )
 
 
@@ -316,6 +340,26 @@ def test_pipeline_uses_manual_title_for_prompt_and_document():
     assert r"\title{手动标题}" in result.latex
     assert client.calls[0]["document_title"] == "手动标题"
     assert client.title_calls == []
+
+
+def test_pipeline_passes_prompt_preset_to_chunk_and_title_client():
+    pages = [PdfPageContext(page_number=1, width=1, height=1)]
+    extractor = FakeExtractor(pages)
+    client = FakeClient(title_response="自定义标题")
+    preset = _custom_preset()
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=1,
+        prompt_preset=preset,
+        title_source="llm",
+    )
+
+    result = converter.convert(Path("docs/sample.pdf"))
+
+    assert r"\title{自定义标题}" in result.latex
+    assert client.calls[0]["prompt_preset"] is preset
+    assert client.title_calls[0]["prompt_preset"] is preset
 
 
 def test_pipeline_generates_title_after_all_chunks():
@@ -885,6 +929,11 @@ def test_chunk_cache_run_key_changes_with_inputs(tmp_path):
     ).run_key
     assert base.run_key != _build_cache_run(tmp_path, chunk_pages=2).run_key
     assert base.run_key != _build_cache_run(tmp_path, extra_prompt="额外要求").run_key
+    assert base.run_key != _build_cache_run(
+        tmp_path,
+        prompt_preset=_custom_preset(suffix="\n自定义规则"),
+    ).run_key
+    assert base.run_key != _build_cache_run(tmp_path, title_source="llm").run_key
     assert base.run_key != _build_cache_run(
         tmp_path,
         image_options=ImageRenderOptions(
