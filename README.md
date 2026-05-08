@@ -1,6 +1,6 @@
 # LaTeX Tools
 
-一个混合 LaTeX + Python 的仓库，包含 LaTeX 编译工具与源码生成工具。目前适合单篇讲义或小型材料。
+编译 LaTeX，或将 PDF 转换为完整的 `.tex` 源码。至少支持 WSL。目前适合单篇讲义或小型材料。
 
 ## 环境要求
 
@@ -35,7 +35,7 @@ pip install -e .
 
 ### 编译 LaTeX
 
-在 WSL 终端中运行：
+在终端中运行：
 
 ```bash
 latexmk src/test.tex
