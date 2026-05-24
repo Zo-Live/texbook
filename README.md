@@ -115,7 +115,7 @@ uv run texbook batch input/ --project -o src/
 
 ```bash
 latexmk src/test.tex
-latexmk "src/6.1 集合与映射.tex"
+latexmk "src/lecture 1.tex"
 latexmk src/lecture-project/main.tex
 ```
 
@@ -124,7 +124,7 @@ latexmk src/lecture-project/main.tex
 ```bash
 cd src
 latexmk test.tex
-latexmk "6.1 集合与映射.tex"
+latexmk "lecture 1.tex"
 latexmk lecture-project/main.tex
 ```
 
