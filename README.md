@@ -169,10 +169,10 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 - `--structure-max-pages`：结构规划阶段最多用页面图像检查的开头页数，默认 `32`。
 - `--force`：仅与 `--project` 一起使用，清空目标项目目录后重新写入。
 - `--cache-dir`：断点续传缓存目录，默认 `build/.texbook_cache/`。
-- `--no-cache`：禁用 chunk 缓存。
+- `--no-cache`：禁用结构规划与 chunk 缓存。
 - `--clear-cache`：清理当前 PDF 和参数对应的缓存后再转换。
 
-断点续传缓存默认启用。相同 PDF、页码和转换参数重跑时会复用已完成 chunk；中途失败后再次运行可从已完成 chunk 继续。等待未命中缓存的 LLM chunk 时，交互式终端会在 stderr 显示加载提示，stdout 仍只输出 LaTeX，便于重定向。
+断点续传缓存默认启用。项目模式下，相同 PDF、页码、模型、prompt、图片参数和结构规划参数重跑时会复用结构规划结果，避免大型教材重复规划；正文转换会继续复用已完成 chunk。中途失败后再次运行可从已完成规划或 chunk 继续。缓存目录中会保留 `evidence.json`、`structure-*.json` 等结构规划中间产物，便于检查书签、标题线索、LLM 规划响应和最终结构计划。等待未命中缓存的 LLM 请求时，交互式终端会在 stderr 显示加载提示，stdout 仍只输出 LaTeX，便于重定向。
 
 ## 项目结构
 

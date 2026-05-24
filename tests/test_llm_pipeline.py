@@ -218,6 +218,9 @@ class RaisingClient:
     def generate_latex_chunk(self, **kwargs):
         raise RuntimeError("LLM failed")
 
+    def generate_structure_plan(self, **kwargs):
+        raise RuntimeError("structure LLM failed")
+
 
 class WaitingRaisingClient:
     def __init__(self, wait_for_event):
@@ -1010,6 +1013,244 @@ def test_pipeline_rebuilds_cache_when_entries_are_corrupted(tmp_path):
     assert len(fresh_client.calls) == 1
     assert "fresh" in fresh_result.latex
     assert "fresh" in cache_file.read_text(encoding="utf-8")
+
+
+def test_project_reuses_cached_structure_plan(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_options = ChunkCacheOptions(
+        cache_dir=tmp_path / "cache",
+        llm_model="test-model",
+    )
+    first_client = FakeClient(latex_fragments=["first-body"])
+    first_converter = LLMPdfConverter(
+        first_client,
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+    )
+
+    first_project = first_converter.convert_project(pdf_path)
+
+    assert first_client.structure_calls
+    assert "第一章" in first_project.files[PurePosixPath("chapters/chapter01.tex")]
+    assert len(list(cache_options.cache_dir.rglob("structure-headings-01.json"))) == 1
+
+    second_client = RaisingClient()
+    second_converter = LLMPdfConverter(
+        second_client,
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+    )
+
+    second_project = second_converter.convert_project(pdf_path)
+
+    assert "first-body" in second_project.files[PurePosixPath("chapters/chapter01.tex")]
+
+
+def test_project_structure_cache_respects_no_cache(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_options = ChunkCacheOptions(
+        cache_dir=tmp_path / "cache",
+        llm_model="test-model",
+    )
+    first_converter = LLMPdfConverter(
+        FakeClient(latex_fragments=["cached-body"]),
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+        structure_options=StructurePlannerOptions(mode=StructureMode.llm),
+    )
+    first_converter.convert_project(pdf_path)
+
+    disabled_converter = LLMPdfConverter(
+        RaisingClient(),
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=None,
+        structure_options=StructurePlannerOptions(mode=StructureMode.llm),
+    )
+
+    with pytest.raises(RuntimeError, match="structure LLM failed"):
+        disabled_converter.convert_project(pdf_path)
+
+
+def test_project_structure_cache_clears_when_requested(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_dir = tmp_path / "cache"
+    first_options = ChunkCacheOptions(
+        cache_dir=cache_dir,
+        llm_model="test-model",
+    )
+    first_converter = LLMPdfConverter(
+        FakeClient(latex_fragments=["old-body"]),
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=first_options,
+    )
+    first_converter.convert_project(pdf_path)
+
+    clear_options = ChunkCacheOptions(
+        cache_dir=cache_dir,
+        clear=True,
+        llm_model="test-model",
+    )
+    second_client = FakeClient(latex_fragments=["new-body"])
+    second_converter = LLMPdfConverter(
+        second_client,
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=clear_options,
+    )
+
+    project = second_converter.convert_project(pdf_path)
+
+    assert second_client.structure_calls
+    assert "new-body" in project.files[PurePosixPath("chapters/chapter01.tex")]
+    assert "old-body" not in project.files[PurePosixPath("chapters/chapter01.tex")]
+
+
+def test_project_structure_cache_misses_when_planning_parameter_changes(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_options = ChunkCacheOptions(
+        cache_dir=tmp_path / "cache",
+        llm_model="test-model",
+    )
+    first_converter = LLMPdfConverter(
+        FakeClient(latex_fragments=["cached-body"]),
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+        structure_options=StructurePlannerOptions(
+            mode=StructureMode.llm,
+            chunk_pages=1,
+            max_pages=1,
+        ),
+    )
+    first_converter.convert_project(pdf_path)
+
+    changed_converter = LLMPdfConverter(
+        RaisingClient(),
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+        structure_options=StructurePlannerOptions(
+            mode=StructureMode.llm,
+            chunk_pages=1,
+            max_pages=2,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="structure LLM failed"):
+        changed_converter.convert_project(pdf_path)
+
+
+def test_project_rebuilds_corrupted_structure_cache(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_options = ChunkCacheOptions(
+        cache_dir=tmp_path / "cache",
+        llm_model="test-model",
+    )
+    first_converter = LLMPdfConverter(
+        FakeClient(latex_fragments=["old-body"]),
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+    )
+    first_converter.convert_project(pdf_path)
+
+    structure_file = next(cache_options.cache_dir.rglob("structure-headings-01.json"))
+    structure_file.write_text("{not-json", encoding="utf-8")
+    fresh_client = FakeClient(latex_fragments=["fresh-body"])
+    fresh_converter = LLMPdfConverter(
+        fresh_client,
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+    )
+
+    project = fresh_converter.convert_project(pdf_path)
+
+    assert fresh_client.structure_calls
+    assert "old-body" in project.files[PurePosixPath("chapters/chapter01.tex")]
+    assert json.loads(structure_file.read_text(encoding="utf-8"))["result"][
+        "status"
+    ] == "complete"
+
+
+def test_project_rebuilds_structure_cache_with_bad_normalized_plan(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_options = ChunkCacheOptions(
+        cache_dir=tmp_path / "cache",
+        llm_model="test-model",
+    )
+    first_converter = LLMPdfConverter(
+        FakeClient(latex_fragments=["old-body"]),
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+    )
+    first_converter.convert_project(pdf_path)
+
+    structure_file = next(cache_options.cache_dir.rglob("structure-headings-01.json"))
+    cache_data = json.loads(structure_file.read_text(encoding="utf-8"))
+    cache_data["normalized_plan"] = {"source": "llm-headings", "items": []}
+    structure_file.write_text(
+        json.dumps(cache_data, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    fresh_client = FakeClient(latex_fragments=["fresh-body"])
+    fresh_converter = LLMPdfConverter(
+        fresh_client,
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+    )
+
+    fresh_converter.convert_project(pdf_path)
+
+    assert fresh_client.structure_calls
+    assert json.loads(structure_file.read_text(encoding="utf-8"))["normalized_plan"][
+        "items"
+    ]
+
+
+def test_project_writes_structure_debug_artifacts_for_bookmarks(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_options = ChunkCacheOptions(
+        cache_dir=tmp_path / "cache",
+        llm_model="test-model",
+    )
+    pages = [_page(1, image_base64="page-1"), _page(2, image_base64="page-2")]
+    extractor = FakeExtractor(
+        pages,
+        bookmarks=[
+            BookmarkEntry(level=1, title="第一章", page_number=1),
+            BookmarkEntry(level=1, title="第二章", page_number=2),
+        ],
+    )
+    converter = LLMPdfConverter(
+        FakeClient(latex_fragments=["body-1", "body-2"]),
+        extractor=extractor,
+        chunk_pages=1,
+        cache_options=cache_options,
+    )
+
+    converter.convert_project(pdf_path)
+
+    evidence_file = next(cache_options.cache_dir.rglob("evidence.json"))
+    local_plan_file = next(cache_options.cache_dir.rglob("structure-local.json"))
+    evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+    local_plan = json.loads(local_plan_file.read_text(encoding="utf-8"))
+    assert evidence["evidence"]["bookmarks"][0]["title"] == "第一章"
+    assert local_plan["plan"]["source"] == "bookmark"
 
 
 def test_pipeline_clears_cache_when_requested(tmp_path):

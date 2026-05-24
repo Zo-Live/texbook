@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from .extract.base import PdfPageContext
 
@@ -142,6 +142,51 @@ class StructurePlan:
             ],
         }
 
+    @classmethod
+    def from_metadata(cls, data: Mapping[str, object]) -> "StructurePlan":
+        """Rebuild a structure plan from a cached metadata representation."""
+        source = StructurePlanSource(str(data.get("source", "")))
+        items_value = data.get("items")
+        if not isinstance(items_value, list):
+            raise ValueError("cached structure plan items must be a list.")
+
+        items: list[StructurePlanItem] = []
+        for item_value in items_value:
+            if not isinstance(item_value, Mapping):
+                continue
+            kind = StructureItemKind(str(item_value.get("kind", "")))
+            item_source = StructurePlanSource(str(item_value.get("source", source.value)))
+            start_page = _coerce_int(item_value.get("start_page"))
+            end_page = _coerce_int(item_value.get("end_page"))
+            if start_page is None or end_page is None:
+                continue
+            items.append(
+                StructurePlanItem(
+                    kind=kind,
+                    title=str(item_value.get("title", "")),
+                    start_page=start_page,
+                    end_page=end_page,
+                    confidence=_coerce_float(item_value.get("confidence")) or 0.0,
+                    source=item_source,
+                )
+            )
+
+        confidence = _coerce_float(data.get("confidence")) or 0.0
+        inspected_pages = _coerce_positive_int_list(data.get("inspected_pages"))
+        notes_value = data.get("notes", [])
+        notes = (
+            [str(note) for note in notes_value if str(note).strip()]
+            if isinstance(notes_value, list)
+            else []
+        )
+        return cls(
+            items=items,
+            source=source,
+            confidence=confidence,
+            notes=notes,
+            inspected_pages=inspected_pages,
+        )
+
 
 @dataclass(frozen=True)
 class BookmarkEntry:
@@ -216,6 +261,97 @@ class StructureEvidence:
         if len(text) <= max_chars:
             return text
         return text[:max_chars].rstrip() + "\n[结构线索已截断]"
+
+    def to_metadata(self) -> dict[str, object]:
+        """Return a JSON-safe metadata representation."""
+        return {
+            "source_title": self.source_title,
+            "total_pages": self.total_pages,
+            "selected_pages": [int(page) for page in self.selected_pages],
+            "effective_pages": self.effective_pages,
+            "bookmarks": [
+                {
+                    "level": entry.level,
+                    "title": entry.title,
+                    "page_number": entry.page_number,
+                }
+                for entry in self.bookmarks
+            ],
+            "heading_candidates": [
+                {
+                    "page_number": candidate.page_number,
+                    "text": candidate.text,
+                    "font_size": candidate.font_size,
+                    "block_type": candidate.block_type,
+                }
+                for candidate in self.heading_candidates
+            ],
+            "page_starts": {
+                str(page_number): self.page_starts[page_number]
+                for page_number in sorted(self.page_starts)
+            },
+        }
+
+    @classmethod
+    def from_metadata(cls, data: Mapping[str, object]) -> "StructureEvidence":
+        """Rebuild structure evidence from cached metadata."""
+        bookmarks_value = data.get("bookmarks", [])
+        bookmarks: list[BookmarkEntry] = []
+        if isinstance(bookmarks_value, list):
+            for item in bookmarks_value:
+                if not isinstance(item, Mapping):
+                    continue
+                page_number = _coerce_int(item.get("page_number"))
+                level = _coerce_int(item.get("level"))
+                if page_number is None or level is None:
+                    continue
+                bookmarks.append(
+                    BookmarkEntry(
+                        level=level,
+                        title=str(item.get("title", "")),
+                        page_number=page_number,
+                    )
+                )
+
+        headings_value = data.get("heading_candidates", [])
+        heading_candidates: list[PageHeadingCandidate] = []
+        if isinstance(headings_value, list):
+            for item in headings_value:
+                if not isinstance(item, Mapping):
+                    continue
+                page_number = _coerce_int(item.get("page_number"))
+                font_size = _coerce_float(item.get("font_size"))
+                if page_number is None or font_size is None:
+                    continue
+                heading_candidates.append(
+                    PageHeadingCandidate(
+                        page_number=page_number,
+                        text=str(item.get("text", "")),
+                        font_size=font_size,
+                        block_type=str(item.get("block_type", "text")),
+                    )
+                )
+
+        page_starts: dict[int, str] = {}
+        starts_value = data.get("page_starts", {})
+        if isinstance(starts_value, Mapping):
+            for key, value in starts_value.items():
+                page_number = _coerce_int(key)
+                if page_number is None:
+                    continue
+                page_starts[page_number] = str(value)
+
+        total_pages = _coerce_int(data.get("total_pages"))
+        if total_pages is None:
+            raise ValueError("cached structure evidence total_pages is invalid.")
+        return cls(
+            source_title=str(data.get("source_title", "")),
+            total_pages=total_pages,
+            selected_pages=_coerce_positive_int_list(data.get("selected_pages")),
+            bookmarks=bookmarks,
+            heading_candidates=heading_candidates,
+            page_starts=page_starts,
+        )
 
 
 def build_plan_from_bookmarks(
@@ -597,6 +733,17 @@ def _coerce_float(value: object) -> float | None:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_positive_int_list(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    pages: list[int] = []
+    for item in value:
+        page = _coerce_int(item)
+        if page is not None and page > 0:
+            pages.append(page)
+    return pages
 
 
 def summarize_pages_for_structure(pages: Sequence[PdfPageContext]) -> list[int]:

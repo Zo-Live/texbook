@@ -27,7 +27,7 @@ from ..structure import (
     normalize_llm_structure_plan,
     summarize_pages_for_structure,
 )
-from .cache import ChunkCacheOptions, ChunkCacheRun
+from .cache import ChunkCacheOptions, ChunkCacheRun, StructurePlanCacheRun
 from .client import LLMChunkResult, LLMStructurePlanResult
 from .presets import PromptPreset, default_prompt_preset
 
@@ -328,11 +328,27 @@ class LLMPdfConverter:
         if not selected_pages:
             raise ValueError("No pages were selected for conversion.")
 
+        structure_cache_run: StructurePlanCacheRun | None = None
+        if self.cache_options is not None:
+            structure_cache_run = StructurePlanCacheRun(
+                options=self.cache_options,
+                pdf_path=pdf_path,
+                pages=pages,
+                document_title=working_title,
+                image_dpi=self.image_dpi,
+                image_options=self.image_options,
+                extra_prompt=self.extra_prompt,
+                structure_options=self.structure_options,
+                evidence=evidence,
+            )
+            structure_cache_run.write_evidence()
+
         structure_plan = self._resolve_structure_plan(
             pdf_path=pdf_path,
             evidence=evidence,
             document_title=working_title,
             pages=pages,
+            cache_run=structure_cache_run,
         )
         chunk_groups = _plan_chunk_groups(
             structure_plan,
@@ -425,21 +441,32 @@ class LLMPdfConverter:
         evidence: StructureEvidence,
         document_title: str,
         pages: Sequence[int] | None,
+        cache_run: StructurePlanCacheRun | None = None,
     ) -> StructurePlan:
         options = self.structure_options
         selected_pages = evidence.effective_pages
         if options.mode in {StructureMode.auto, StructureMode.local}:
             bookmark_plan = build_plan_from_bookmarks(evidence)
             if bookmark_plan is not None:
+                if cache_run is not None:
+                    cache_run.write_local_plan(bookmark_plan)
                 return bookmark_plan
             if options.mode == StructureMode.local:
                 local_plan = build_local_heading_plan(evidence)
                 if local_plan is not None:
+                    if cache_run is not None:
+                        cache_run.write_local_plan(local_plan)
                     return local_plan
-                return build_chunk_fallback_plan(
+                fallback_plan = build_chunk_fallback_plan(
                     _chunk_page_numbers(selected_pages, self.chunk_pages),
                     note="本地结构线索不足，已回退到按 LLM chunk 划分章节文件。",
                 )
+                if cache_run is not None:
+                    cache_run.write_local_plan(
+                        fallback_plan,
+                        filename="structure-fallback.json",
+                    )
+                return fallback_plan
 
         if options.mode in {StructureMode.auto, StructureMode.llm}:
             try:
@@ -448,6 +475,7 @@ class LLMPdfConverter:
                     evidence=evidence,
                     document_title=document_title,
                     pages=pages,
+                    cache_run=cache_run,
                 )
             except Exception:
                 if options.mode == StructureMode.llm:
@@ -460,10 +488,18 @@ class LLMPdfConverter:
 
         local_plan = build_local_heading_plan(evidence)
         if local_plan is not None and options.mode == StructureMode.local:
+            if cache_run is not None:
+                cache_run.write_local_plan(local_plan)
             return local_plan
-        return build_chunk_fallback_plan(
+        fallback_plan = build_chunk_fallback_plan(
             _chunk_page_numbers(selected_pages, self.chunk_pages),
         )
+        if cache_run is not None:
+            cache_run.write_local_plan(
+                fallback_plan,
+                filename="structure-fallback.json",
+            )
+        return fallback_plan
 
     def _generate_llm_structure_plan(
         self,
@@ -472,6 +508,7 @@ class LLMPdfConverter:
         evidence: StructureEvidence,
         document_title: str,
         pages: Sequence[int] | None,
+        cache_run: StructurePlanCacheRun | None = None,
     ) -> StructurePlan | None:
         selected_pages = evidence.effective_pages
         page_batches = _chunk_page_numbers(
@@ -480,29 +517,42 @@ class LLMPdfConverter:
         )
         inspected_pages: list[int] = []
         last_result: LLMStructurePlanResult | None = None
+        request_index = 0
 
         for batch in page_batches:
+            request_index += 1
             chunk_pages = self._load_structure_pages(
                 pdf_path,
                 page_numbers=batch,
             )
             inspected_pages.extend(summarize_pages_for_structure(chunk_pages))
             try:
-                with self.progress_spinner.spin("Waiting for LLM structure plan"):
-                    result = self.client.generate_structure_plan(
-                        document_title=document_title,
-                        evidence=evidence,
+                result = (
+                    cache_run.read(
+                        stage="toc",
+                        request_index=request_index,
                         pages=chunk_pages,
                         inspected_pages=inspected_pages,
-                        stage="toc",
-                        extra_prompt=self.extra_prompt,
                     )
+                    if cache_run is not None
+                    else None
+                )
+                if result is None:
+                    with self.progress_spinner.spin("Waiting for LLM structure plan"):
+                        result = self.client.generate_structure_plan(
+                            document_title=document_title,
+                            evidence=evidence,
+                            pages=chunk_pages,
+                            inspected_pages=inspected_pages,
+                            stage="toc",
+                            extra_prompt=self.extra_prompt,
+                        )
             finally:
                 _release_page_images(chunk_pages)
 
             last_result = result
             if result.status == "complete":
-                return normalize_llm_structure_plan(
+                plan = normalize_llm_structure_plan(
                     items=result.plan,
                     source=StructurePlanSource.llm_toc,
                     confidence=result.confidence,
@@ -510,24 +560,61 @@ class LLMPdfConverter:
                     inspected_pages=inspected_pages,
                     notes=[*result.notes, result.reason],
                 )
+                if cache_run is not None:
+                    cache_run.write(
+                        stage="toc",
+                        request_index=request_index,
+                        pages=chunk_pages,
+                        inspected_pages=inspected_pages,
+                        result=result,
+                        normalized_plan=plan,
+                    )
+                return plan
+            if cache_run is not None:
+                cache_run.write(
+                    stage="toc",
+                    request_index=request_index,
+                    pages=chunk_pages,
+                    inspected_pages=inspected_pages,
+                    result=result,
+                )
             if result.status == "insufficient":
                 break
 
-        with self.progress_spinner.spin("Waiting for LLM heading structure plan"):
-            heading_result = self.client.generate_structure_plan(
-                document_title=document_title,
-                evidence=evidence,
+        heading_result = (
+            cache_run.read(
+                stage="headings",
+                request_index=1,
                 pages=[],
                 inspected_pages=inspected_pages,
-                stage="headings",
-                extra_prompt=self.extra_prompt,
             )
+            if cache_run is not None
+            else None
+        )
+        if heading_result is None:
+            with self.progress_spinner.spin("Waiting for LLM heading structure plan"):
+                heading_result = self.client.generate_structure_plan(
+                    document_title=document_title,
+                    evidence=evidence,
+                    pages=[],
+                    inspected_pages=inspected_pages,
+                    stage="headings",
+                    extra_prompt=self.extra_prompt,
+                )
         if heading_result.status != "complete":
+            if cache_run is not None:
+                cache_run.write(
+                    stage="headings",
+                    request_index=1,
+                    pages=[],
+                    inspected_pages=inspected_pages,
+                    result=heading_result,
+                )
             if last_result is not None and last_result.reason:
                 return None
             return None
 
-        return normalize_llm_structure_plan(
+        plan = normalize_llm_structure_plan(
             items=heading_result.plan,
             source=StructurePlanSource.llm_headings,
             confidence=heading_result.confidence,
@@ -535,6 +622,16 @@ class LLMPdfConverter:
             inspected_pages=inspected_pages,
             notes=[*heading_result.notes, heading_result.reason],
         )
+        if cache_run is not None:
+            cache_run.write(
+                stage="headings",
+                request_index=1,
+                pages=[],
+                inspected_pages=inspected_pages,
+                result=heading_result,
+                normalized_plan=plan,
+            )
+        return plan
 
     def _load_context_chunk(
         self,
