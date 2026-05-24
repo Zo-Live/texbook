@@ -208,6 +208,24 @@ def test_build_converter_accepts_unlimited_timeout(tmp_path):
     assert converter.chunk_pages == 2
 
 
+def test_build_converter_passes_temperature_to_client_and_cache(tmp_path):
+    converter = _build_converter(
+        model="test-model",
+        api_key="test-key",
+        base_url=None,
+        temperature=0.2,
+        timeout=10.0,
+        max_tokens=128,
+        chunk_pages=2,
+        image_dpi=144,
+        cache_dir=tmp_path / "cache",
+    )
+
+    assert converter.client.config.temperature == 0.2
+    assert converter.cache_options is not None
+    assert converter.cache_options.llm_temperature == 0.2
+
+
 def test_build_converter_supports_cache_controls(tmp_path):
     disabled = _build_converter(
         model="test-model",
@@ -339,6 +357,14 @@ def test_presets_cli_lists_builtin_preset():
     assert result.exit_code == 0
     assert "chinese-math" in result.output
     assert "builtin" in result.output
+
+
+@pytest.mark.parametrize("command", ["extract", "batch"])
+def test_conversion_commands_expose_temperature_option(command):
+    result = runner.invoke(app, [command, "--help"])
+
+    assert result.exit_code == 0
+    assert "--temperature" in result.output
 
 
 def test_presets_cli_adds_and_shows_repository_preset(tmp_path, monkeypatch):

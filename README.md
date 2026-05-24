@@ -62,6 +62,8 @@ uv run texbook extract "input/lecture.pdf" -o "output/lecture.tex"
 
 只给 `-o` 文件名时，输出路径会解析到仓库根目录的 `src/` 下；带目录时按仓库根目录解析。路径包含空格时请使用引号。
 
+当前 `extract` 的 `-o` 始终表示单个 `.tex` 输出文件，不会根据路径后缀或目标路径是否为目录自动切换输出模式。目录化项目输出将使用显式入口 `extract --project -o <dir>`，实际写目录功能会在后续阶段加入。
+
 只转换部分页面：
 
 ```bash
@@ -134,6 +136,7 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 - `--prefetch-chunks`：预渲染后续 chunk 数，默认 `1`；LLM 请求仍顺序发送。
 - `--timeout`：LLM 响应读取超时秒数，默认不限制等待时间。
 - `--max-tokens`：LLM 响应最大 token 数，默认 `128000`。
+- `--temperature`：LLM 采样温度，默认 `1.0`；`extract` 和 `batch` 都支持。
 - `--cache-dir`：断点续传缓存目录，默认 `build/.texbook_cache/`。
 - `--no-cache`：禁用 chunk 缓存。
 - `--clear-cache`：清理当前 PDF 和参数对应的缓存后再转换。
