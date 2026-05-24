@@ -366,6 +366,8 @@ dist/
 .pytest_cache
 
 ### Project State ###
+input/*
+output/*
 docs/*
 src/*.tex
 .codex
@@ -375,7 +377,4 @@ AGENTS.md
 CLAUDE.md
 LaTeX.code-workspace
 .vscode
-!docs/.gitkeep
-!build/.gitkeep
-!out/.gitkeep
 project-output-architecture.md
