@@ -13,6 +13,7 @@ from texbook.extract.base import (
     PdfDocumentChunk,
     PdfPageContext,
 )
+from texbook.document_class import DocumentClassMode, normalize_document_class_result
 from texbook.structure import (
     BookmarkEntry,
     PageHeadingCandidate,
@@ -116,6 +117,7 @@ class FakeClient:
     ):
         self.calls = []
         self.title_calls = []
+        self.document_class_calls = []
         self.structure_calls = []
         self.latex_fragments = latex_fragments
         self.title_response = title_response
@@ -125,6 +127,7 @@ class FakeClient:
         self,
         *,
         document_title,
+        document_class=None,
         pages,
         chunk_index,
         total_chunks,
@@ -135,6 +138,7 @@ class FakeClient:
         self.calls.append(
             {
                 "document_title": document_title,
+                "document_class": document_class,
                 "pages": [page.page_number for page in pages],
                 "chunk_index": chunk_index,
                 "total_chunks": total_chunks,
@@ -176,6 +180,38 @@ class FakeClient:
         if self.title_exception is not None:
             raise self.title_exception
         return self.title_response
+
+    def generate_document_class(
+        self,
+        *,
+        document_title,
+        evidence,
+        pages=(),
+        extra_prompt="",
+    ):
+        self.document_class_calls.append(
+            {
+                "document_title": document_title,
+                "pages": [page.page_number for page in pages],
+                "extra_prompt": extra_prompt,
+            }
+        )
+        class Result:
+            document_class = "ctexart"
+            confidence = 0.8
+            reason = "短篇中文讲义"
+            notes = ["文档类判断 note"]
+
+            def normalized(self):
+                return normalize_document_class_result(
+                    document_class=self.document_class,
+                    confidence=self.confidence,
+                    reason=self.reason,
+                    notes=self.notes,
+                    source="llm",
+                )
+
+        return Result()
 
     def generate_structure_plan(
         self,
@@ -221,6 +257,9 @@ class RaisingClient:
     def generate_latex_chunk(self, **kwargs):
         raise RuntimeError("LLM failed")
 
+    def generate_document_class(self, **kwargs):
+        raise RuntimeError("document-class LLM failed")
+
     def generate_structure_plan(self, **kwargs):
         raise RuntimeError("structure LLM failed")
 
@@ -232,6 +271,24 @@ class WaitingRaisingClient:
     def generate_latex_chunk(self, **kwargs):
         assert self.wait_for_event.wait(timeout=1)
         raise RuntimeError("LLM failed")
+
+    def generate_document_class(self, **kwargs):
+        class Result:
+            document_class = "ctexart"
+            confidence = 0.8
+            reason = "短篇中文讲义"
+            notes = []
+
+            def normalized(self):
+                return normalize_document_class_result(
+                    document_class=self.document_class,
+                    confidence=self.confidence,
+                    reason=self.reason,
+                    notes=self.notes,
+                    source="llm",
+                )
+
+        return Result()
 
 
 class FailingSecondChunkClient(FakeClient):
@@ -413,7 +470,12 @@ def test_pipeline_chunks_pages_and_builds_document():
     assert "\\documentclass[UTF8]{ctexart}" in result.latex
     assert "\\section{Chunk 1}" in result.latex
     assert "\\section{Chunk 2}" in result.latex
-    assert result.notes == ["chunk-1", "chunk-2"]
+    assert result.notes == [
+        "document class: ctexart（短篇中文讲义）",
+        "文档类判断 note",
+        "chunk-1",
+        "chunk-2",
+    ]
     assert converter.prefetch_chunks == 1
     assert extractor.calls[0]["image_dpi"] == 144
     assert extractor.calls[0]["chunk_size"] == 2
@@ -449,7 +511,12 @@ def test_pipeline_can_build_project_output():
     project = converter.convert_project(Path("docs/sample.pdf"))
 
     assert project.entrypoint == PurePosixPath("main.tex")
-    assert project.notes == ["chunk-1", "chunk-2"]
+    assert project.notes == [
+        "document class: ctexart（短篇中文讲义）",
+        "文档类判断 note",
+        "chunk-1",
+        "chunk-2",
+    ]
     assert set(project.files) == {
         PurePosixPath("main.tex"),
         PurePosixPath("preamble.tex"),
@@ -461,6 +528,7 @@ def test_pipeline_can_build_project_output():
     assert r"\input{chapters/chapter01}" in project.files[PurePosixPath("main.tex")]
     assert project.files[PurePosixPath("chapters/chapter01.tex")] == "\\section{Chunk 1}\n"
     assert project.files[PurePosixPath("chapters/chapter02.tex")] == "\\section{Chunk 2}\n"
+    assert project.metadata["document_class"] == "ctexart"
     assert client.calls[0]["document_title"] == "项目标题"
     assert client.calls[1]["previous_latex_tail"]
     assert all(page.image_base64 is None for chunk in extractor.chunks for page in chunk.pages)
@@ -812,7 +880,11 @@ def test_pipeline_falls_back_to_filename_when_llm_title_fails():
 
     assert r"\title{sample}" in result.latex
     assert len(client.title_calls) == 1
-    assert result.notes == ["chunk-1"]
+    assert result.notes == [
+        "document class: ctexart（短篇中文讲义）",
+        "文档类判断 note",
+        "chunk-1",
+    ]
 
 
 def test_pipeline_can_show_today_date():
@@ -899,6 +971,8 @@ def test_pipeline_emits_progress_for_uncached_and_cached_chunks(tmp_path):
     assert [event.kind for event in first_events] == [
         "request_started",
         "request_completed",
+        "request_started",
+        "request_completed",
     ]
 
     second_events = []
@@ -912,8 +986,8 @@ def test_pipeline_emits_progress_for_uncached_and_cached_chunks(tmp_path):
 
     second_converter.convert(pdf_path)
 
-    assert [event.kind for event in second_events] == ["cache_hit"]
-    assert second_events[0].operation == "chunk"
+    assert [event.kind for event in second_events] == ["cache_hit", "cache_hit"]
+    assert [event.operation for event in second_events] == ["document_class", "chunk"]
 
 
 def test_pipeline_reuses_chunk_cache_after_successful_run(tmp_path):
@@ -1301,6 +1375,7 @@ def test_project_structure_cache_respects_no_cache(tmp_path):
         extractor=FakeExtractor([_page(1, image_base64="page-1")]),
         chunk_pages=1,
         cache_options=None,
+        document_class=DocumentClassMode.ctexart,
         structure_options=StructurePlannerOptions(mode=StructureMode.llm),
     )
 
@@ -1644,10 +1719,11 @@ def test_pipeline_releases_prefetched_chunk_images_when_client_fails():
     with pytest.raises(RuntimeError, match="LLM failed"):
         converter.convert(Path("docs/sample.pdf"))
 
-    assert [page.image_base64 for chunk in extractor.chunks for page in chunk.pages] == [
-        None,
-        None,
-    ]
+    assert all(
+        page.image_base64 is None
+        for chunk in extractor.chunks
+        for page in chunk.pages
+    )
 
 
 def test_pipeline_uses_custom_image_options():

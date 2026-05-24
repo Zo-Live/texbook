@@ -7,11 +7,17 @@ from typing import Any, Mapping, Sequence
 
 import httpx
 
+from ..document_class import (
+    DocumentClassResult,
+    LatexDocumentClass,
+    normalize_document_class_result,
+)
 from ..extract.base import PdfPageContext
 from ..structure import StructureEvidence
 from .config import LLMConfig
 from .prompts import (
     build_chunk_messages,
+    build_document_class_messages,
     build_structure_messages,
     build_title_messages,
 )
@@ -20,6 +26,26 @@ from .presets import PromptPreset
 
 class LLMResponseError(RuntimeError):
     """Raised when the LLM response cannot be used."""
+
+
+@dataclass
+class LLMDocumentClassResult:
+    """Parsed result for one document-class request."""
+
+    document_class: str
+    confidence: float = 0.0
+    reason: str = ""
+    notes: list[str] = field(default_factory=list)
+
+    def normalized(self) -> DocumentClassResult:
+        """Return a validated core document class result."""
+        return normalize_document_class_result(
+            document_class=self.document_class,
+            confidence=self.confidence,
+            reason=self.reason,
+            notes=self.notes,
+            source="llm",
+        )
 
 
 @dataclass
@@ -71,6 +97,7 @@ class OpenAICompatibleClient:
         self,
         *,
         document_title: str,
+        document_class: LatexDocumentClass = LatexDocumentClass.ctexart,
         pages: Sequence[PdfPageContext],
         chunk_index: int,
         total_chunks: int,
@@ -80,6 +107,7 @@ class OpenAICompatibleClient:
     ) -> LLMChunkResult:
         messages = build_chunk_messages(
             document_title=document_title,
+            document_class=document_class,
             pages=pages,
             chunk_index=chunk_index,
             total_chunks=total_chunks,
@@ -113,6 +141,50 @@ class OpenAICompatibleClient:
         if not isinstance(content, str):
             raise LLMResponseError("LLM response content is empty or not text.")
         return parse_chunk_response(content)
+
+    def generate_document_class(
+        self,
+        *,
+        document_title: str,
+        evidence: StructureEvidence,
+        pages: Sequence[PdfPageContext] = (),
+        extra_prompt: str = "",
+    ) -> LLMDocumentClassResult:
+        """Generate the target LaTeX document class for a PDF."""
+        messages = build_document_class_messages(
+            document_title=document_title,
+            evidence=evidence,
+            pages=pages,
+            extra_prompt=extra_prompt,
+        )
+        request_kwargs = {
+            "model": self.config.model,
+            "messages": messages,
+            "temperature": self.config.temperature,
+            "max_tokens": min(self.config.max_tokens, 1024),
+        }
+        try:
+            response = self._create_completion(request_kwargs, response_format=True)
+        except Exception as exc:  # pragma: no cover - backend specific fallback
+            if _is_temperature_one_error(exc):
+                request_kwargs["temperature"] = 1.0
+                response = self._create_completion(
+                    request_kwargs,
+                    response_format=True,
+                )
+            elif "response_format" not in str(exc):
+                raise
+            else:
+                response = self._create_completion(
+                    request_kwargs,
+                    response_format=False,
+                )
+        content = response.choices[0].message.content
+        if not isinstance(content, str):
+            raise LLMResponseError(
+                "LLM document-class response content is empty or not text."
+            )
+        return parse_document_class_response(content)
 
     def generate_document_title(
         self,
@@ -226,6 +298,42 @@ def parse_chunk_response(raw_content: str) -> LLMChunkResult:
         notes = [str(notes_value)]
 
     return LLMChunkResult(latex=latex.strip(), notes=notes)
+
+
+def parse_document_class_response(raw_content: str) -> LLMDocumentClassResult:
+    """Parse the expected JSON object from an LLM document-class response."""
+    data = _load_json_object(_strip_code_fence(raw_content))
+    document_class = data.get("document_class")
+    if not isinstance(document_class, str) or not document_class.strip():
+        raise LLMResponseError(
+            "LLM document-class JSON must contain a non-empty document_class field."
+        )
+
+    notes_value = data.get("notes", [])
+    if notes_value is None:
+        notes = []
+    elif isinstance(notes_value, list):
+        notes = [str(note) for note in notes_value if str(note).strip()]
+    else:
+        notes = [str(notes_value)]
+
+    confidence_value = data.get("confidence", 0.0)
+    try:
+        confidence = float(confidence_value)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    result = LLMDocumentClassResult(
+        document_class=document_class.strip().lower(),
+        confidence=min(1.0, max(0.0, confidence)),
+        reason=str(data.get("reason", "")).strip(),
+        notes=notes,
+    )
+    try:
+        result.normalized()
+    except ValueError as exc:
+        raise LLMResponseError(str(exc)) from exc
+    return result
 
 
 def parse_title_response(raw_content: str) -> str:

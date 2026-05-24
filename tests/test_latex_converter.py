@@ -10,6 +10,7 @@ from texbook.complex_content import (
     collect_complex_content_candidates,
     complex_content_metadata,
 )
+from texbook.document_class import LatexDocumentClass
 from texbook.convert.latex_converter import LatexConverter
 from texbook.convert.project import (
     LatexProjectBuilder,
@@ -193,7 +194,7 @@ def test_project_builder_builds_main_preamble_and_chapters():
         PurePosixPath("chapters/chapter02.tex"),
     }
     assert project.notes == ["removed header/footer"]
-    assert project.metadata == {}
+    assert project.metadata == {"document_class": "ctexart"}
 
     main = project.files[PurePosixPath("main.tex")]
     assert "% !TEX program = xelatex" in main
@@ -246,6 +247,64 @@ def test_project_builder_records_complex_content_metadata():
         "figure",
         "layout_note",
     }
+
+
+def test_project_builder_can_emit_ctexbeamer_project():
+    builder = LatexProjectBuilder()
+
+    project = builder.build(
+        title="幻灯片",
+        document_class=LatexDocumentClass.ctexbeamer,
+        fragments=[
+            r"""
+            \begin{frame}
+            \frametitle{集合}
+            \begin{block}{注意}
+            正文
+            \end{block}
+            \end{frame}
+            """
+        ],
+    )
+
+    main = project.files[PurePosixPath("main.tex")]
+    preamble = project.files[PurePosixPath("preamble.tex")]
+    chapter = project.files[PurePosixPath("chapters/chapter01.tex")]
+
+    assert r"\documentclass[UTF8]{ctexbeamer}" in main
+    assert r"\begin{frame}" in main
+    assert r"\titlepage" in main
+    assert r"\@ifundefined{definition}" in preamble
+    assert r"\begin{frame}" in chapter
+    assert r"\frametitle{集合}" in chapter
+    assert r"\begin{block}{注意}" in chapter
+    assert project.metadata["document_class"] == "ctexbeamer"
+
+
+def test_non_beamer_project_cleans_beamer_only_wrappers():
+    builder = LatexProjectBuilder()
+
+    project = builder.build(
+        title="讲义",
+        fragments=[
+            r"""
+            \begin{frame}
+            \frametitle{集合}
+            \begin{block}{注意}
+            正文
+            \end{block}
+            \end{frame}
+            """
+        ],
+    )
+
+    chapter = project.files[PurePosixPath("chapters/chapter01.tex")]
+
+    assert r"\begin{frame}" not in chapter
+    assert r"\frametitle" not in chapter
+    assert r"\begin{block}" not in chapter
+    assert r"\subsection*{集合}" in chapter
+    assert r"\paragraph{注意}" in chapter
 
 
 def test_project_builder_skips_empty_chapters_and_can_show_today_date():
@@ -335,6 +394,44 @@ def test_project_builder_builds_semantic_plan_files_with_appendix():
         r"\section{第一章 集合}"
     ) == 1
     assert project.metadata["structure_plan"]["source"] == "llm-toc"
+
+
+def test_project_builder_promotes_planned_book_sections_to_chapters():
+    builder = LatexProjectBuilder()
+    plan = StructurePlan(
+        source=StructurePlanSource.llm_toc,
+        confidence=0.8,
+        items=[
+            StructurePlanItem(
+                kind=StructureItemKind.chapter,
+                title="第一章 集合",
+                start_page=1,
+                end_page=2,
+                confidence=0.8,
+                source=StructurePlanSource.llm_toc,
+            ),
+        ],
+    )
+
+    project = builder.build_from_plan(
+        title="教材",
+        document_class=LatexDocumentClass.ctexbook,
+        structure_plan=plan,
+        sections=[
+            LatexProjectSection(
+                item=plan.items[0],
+                fragments=[r"\section{第一章 集合}" + "\n正文"],
+            ),
+        ],
+    )
+
+    main = project.files[PurePosixPath("main.tex")]
+    chapter = project.files[PurePosixPath("chapters/chapter01.tex")]
+
+    assert r"\documentclass[UTF8]{ctexbook}" in main
+    assert chapter.startswith(r"\chapter{第一章 集合}")
+    assert r"\section{第一章 集合}" not in chapter
+    assert project.metadata["document_class"] == "ctexbook"
 
 
 def test_project_result_rejects_missing_entrypoint():

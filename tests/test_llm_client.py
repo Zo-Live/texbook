@@ -3,15 +3,22 @@
 import sys
 from types import SimpleNamespace
 
+from texbook.document_class import LatexDocumentClass
 from texbook.extract.base import PageTextBlock, PdfPageContext
+from texbook.structure import StructureEvidence
 from texbook.llm.client import (
     LLMResponseError,
     OpenAICompatibleClient,
     parse_chunk_response,
+    parse_document_class_response,
     parse_title_response,
 )
 from texbook.llm.config import LLMConfig
-from texbook.llm.prompts import build_chunk_messages, build_title_messages
+from texbook.llm.prompts import (
+    build_chunk_messages,
+    build_document_class_messages,
+    build_title_messages,
+)
 from texbook.llm.presets import PromptPreset, default_prompt_preset
 
 
@@ -46,6 +53,26 @@ def test_parse_title_response_rejects_missing_title():
         parse_title_response('{"latex": "\\\\section{集合}"}')
     except LLMResponseError as exc:
         assert "title" in str(exc)
+    else:
+        raise AssertionError("Expected LLMResponseError")
+
+
+def test_parse_document_class_response_normalizes_supported_class():
+    result = parse_document_class_response(
+        '{"document_class": "ctexbeamer", "confidence": 0.9, "reason": "幻灯片", "notes": ["有导航"]}'
+    )
+
+    assert result.document_class == "ctexbeamer"
+    assert result.confidence == 0.9
+    assert result.reason == "幻灯片"
+    assert result.normalized().document_class.value == "ctexbeamer"
+
+
+def test_parse_document_class_response_rejects_unknown_class():
+    try:
+        parse_document_class_response('{"document_class": "memoir"}')
+    except LLMResponseError as exc:
+        assert "document class" in str(exc)
     else:
         raise AssertionError("Expected LLMResponseError")
 
@@ -135,6 +162,53 @@ def test_build_chunk_messages_contains_complex_content_policy():
     assert "% TODO: figure pending_asset" in system
     assert r"\includegraphics" in system
     assert "% TODO: layout" in system
+
+
+def test_build_chunk_messages_contains_document_class_instruction():
+    messages = build_chunk_messages(
+        document_title="第六章",
+        document_class=LatexDocumentClass.ctexbeamer,
+        pages=[PdfPageContext(page_number=1, width=1, height=1)],
+        chunk_index=1,
+        total_chunks=1,
+    )
+
+    user_text = messages[1]["content"][0]["text"]
+    assert "目标 document class：ctexbeamer" in user_text
+    assert "frame" in user_text
+    assert r"\frametitle" in user_text
+
+
+def test_build_document_class_messages_contains_evidence_and_image():
+    page = PdfPageContext(
+        page_number=1,
+        width=16,
+        height=9,
+        text_blocks=[
+            PageTextBlock(
+                text="6.1 集合与映射",
+                bbox=(0, 0, 10, 1),
+                font_size=20,
+                block_type="heading",
+            )
+        ],
+        image_base64="ZmFrZQ==",
+    )
+
+    messages = build_document_class_messages(
+        document_title="6.1 集合与映射",
+        evidence=StructureEvidence(
+            source_title="6.1 集合与映射",
+            total_pages=2,
+            selected_pages=[1, 2],
+        ),
+        pages=[page],
+    )
+
+    assert "document_class" in messages[0]["content"]
+    user_content = messages[1]["content"]
+    assert "ctexbeamer" in messages[0]["content"]
+    assert any(item["type"] == "image_url" for item in user_content)
 
 
 def test_build_title_messages_contains_fallback_and_evidence():

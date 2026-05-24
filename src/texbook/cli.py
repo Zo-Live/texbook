@@ -13,6 +13,7 @@ import click
 import typer
 
 from .convert import LatexProjectResult
+from .document_class import DocumentClassMode
 from .extract.base import DocumentExtractionError, ImageRenderOptions
 from .llm.cache import ChunkCacheOptions
 from .llm.client import OpenAICompatibleClient
@@ -45,6 +46,18 @@ class StructureOption(str, Enum):
     off = "off"
     local = "local"
     llm = "llm"
+
+
+class DocumentClassOption(str, Enum):
+    """LaTeX document class selection mode for CLI options."""
+
+    auto = "auto"
+    article = "article"
+    book = "book"
+    beamer = "beamer"
+    ctexart = "ctexart"
+    ctexbook = "ctexbook"
+    ctexbeamer = "ctexbeamer"
 
 
 @dataclass(frozen=True)
@@ -310,6 +323,7 @@ def _build_converter(
     title_source: TitleSource | str = TitleSource.filename,
     manual_title: Optional[str] = None,
     show_date: bool = False,
+    document_class: DocumentClassOption | str = DocumentClassOption.auto,
     structure: StructureOption | str = StructureOption.auto,
     structure_chunk_pages: int = 8,
     structure_max_pages: int = 32,
@@ -338,11 +352,17 @@ def _build_converter(
         resolved_structure = (
             structure.value if isinstance(structure, StructureOption) else str(structure)
         )
+        resolved_document_class = (
+            document_class.value
+            if isinstance(document_class, DocumentClassOption)
+            else str(document_class)
+        )
         structure_options = StructurePlannerOptions(
             mode=StructureMode(resolved_structure),
             chunk_pages=structure_chunk_pages,
             max_pages=structure_max_pages,
         )
+        document_class_mode = DocumentClassMode.from_value(resolved_document_class)
 
         config = LLMConfig.from_values(
             model=model,
@@ -401,6 +421,7 @@ def _build_converter(
         title_source=resolved_title_source,
         manual_title=resolved_manual_title,
         show_date=show_date,
+        document_class=document_class_mode,
         structure_options=structure_options,
         scheduler=llm_scheduler,
         progress_reporter=progress_reporter,
@@ -664,6 +685,15 @@ def extract(
         "--show-date/--hide-date",
         help="Show \\today in the generated LaTeX title block",
     ),
+    document_class: DocumentClassOption = typer.Option(
+        DocumentClassOption.auto,
+        "--document-class",
+        case_sensitive=False,
+        help=(
+            "LaTeX document class: auto, article, book, beamer, "
+            "ctexart, ctexbook, or ctexbeamer"
+        ),
+    ),
     preset: str = typer.Option(
         DEFAULT_PROMPT_PRESET_NAME,
         "--preset",
@@ -797,6 +827,7 @@ def extract(
         title_source=title_source,
         manual_title=title,
         show_date=show_date,
+        document_class=document_class,
         structure=structure,
         structure_chunk_pages=structure_chunk_pages,
         structure_max_pages=structure_max_pages,
@@ -895,6 +926,15 @@ def batch(
         False,
         "--show-date/--hide-date",
         help="Show \\today in the generated LaTeX title block",
+    ),
+    document_class: DocumentClassOption = typer.Option(
+        DocumentClassOption.auto,
+        "--document-class",
+        case_sensitive=False,
+        help=(
+            "LaTeX document class: auto, article, book, beamer, "
+            "ctexart, ctexbook, or ctexbeamer"
+        ),
     ),
     preset: str = typer.Option(
         DEFAULT_PROMPT_PRESET_NAME,
@@ -1065,6 +1105,7 @@ def batch(
             preset=preset,
             title_source=title_source,
             show_date=show_date,
+            document_class=document_class,
             structure=structure,
             structure_chunk_pages=structure_chunk_pages,
             structure_max_pages=structure_max_pages,

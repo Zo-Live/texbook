@@ -5,6 +5,7 @@ import re
 from typing import List, Sequence
 
 from ..complex_content import replace_unsupported_graphics_references
+from ..document_class import LatexDocumentClass
 from ..extract.base import ExtractedContent
 
 
@@ -101,29 +102,32 @@ _INVALID_CHAR_TRANSLATION = {
 class LatexConverter:
     """Converts ExtractedContent to a complete LaTeX document string."""
 
-    def __init__(self, use_ctex: bool = True):
-        self.use_ctex = use_ctex
+    def __init__(
+        self,
+        use_ctex: bool = True,
+        document_class: LatexDocumentClass | str | None = None,
+    ):
+        if document_class is None:
+            self.document_class = (
+                LatexDocumentClass.ctexart if use_ctex else LatexDocumentClass.article
+            )
+        elif isinstance(document_class, LatexDocumentClass):
+            self.document_class = document_class
+        else:
+            self.document_class = LatexDocumentClass.from_value(str(document_class))
+        self.use_ctex = self.document_class.is_ctex
 
     def convert(self, content: ExtractedContent, *, show_date: bool = False) -> str:
         lines: List[str] = []
         lines.append("% !TEX program = xelatex")
-        docclass = r"\documentclass[UTF8]{ctexart}" if self.use_ctex else r"\documentclass{article}"
-        lines.append(docclass)
-        lines.append(r"\usepackage{amsmath}")
-        lines.append(r"\usepackage{amsthm}")
-        lines.append(r"\usepackage{amssymb}")
-        lines.append(r"\newtheorem{definition}{定义}")
-        lines.append(r"\newtheorem{theorem}{定理}")
-        lines.append(r"\newtheorem{lemma}{引理}")
-        lines.append(r"\newtheorem{property}{性质}")
-        lines.append(r"\newtheorem{corollary}{推论}")
-        lines.append(r"\newtheorem{example}{例}")
+        lines.append(self.documentclass_line())
+        lines.extend(self.preamble_lines())
         lines.append("")
         lines.append(r"\title{" + self._escape_latex(content.title) + "}")
         lines.append(self._date_line(show_date))
         lines.append("")
         lines.append(r"\begin{document}")
-        lines.append(r"\maketitle")
+        lines.extend(self.title_page_lines())
         lines.append("")
 
         for block in content.blocks:
@@ -200,10 +204,23 @@ class LatexConverter:
 
     def documentclass_line(self) -> str:
         """Return the configured documentclass line."""
-        return r"\documentclass[UTF8]{ctexart}" if self.use_ctex else r"\documentclass{article}"
+        return self.document_class.documentclass_line()
 
     def preamble_lines(self) -> list[str]:
         """Return package and theorem definitions shared by all output modes."""
+        if self.document_class.is_beamer:
+            return [
+                r"\usepackage{amsmath}",
+                r"\usepackage{amssymb}",
+                r"\makeatletter",
+                r"\@ifundefined{definition}{\newtheorem{definition}{定义}}{}",
+                r"\@ifundefined{theorem}{\newtheorem{theorem}{定理}}{}",
+                r"\@ifundefined{lemma}{\newtheorem{lemma}{引理}}{}",
+                r"\@ifundefined{property}{\newtheorem{property}{性质}}{}",
+                r"\@ifundefined{corollary}{\newtheorem{corollary}{推论}}{}",
+                r"\@ifundefined{example}{\newtheorem{example}{例}}{}",
+                r"\makeatother",
+            ]
         return [
             r"\usepackage{amsmath}",
             r"\usepackage{amsthm}",
@@ -215,6 +232,16 @@ class LatexConverter:
             r"\newtheorem{corollary}{推论}",
             r"\newtheorem{example}{例}",
         ]
+
+    def title_page_lines(self) -> list[str]:
+        """Return document opening title page commands."""
+        if self.document_class.is_beamer:
+            return [
+                r"\begin{frame}",
+                r"\titlepage",
+                r"\end{frame}",
+            ]
+        return [r"\maketitle"]
 
     def title_block_lines(self, title: str, *, show_date: bool = False) -> list[str]:
         """Return title and date lines for a LaTeX document wrapper."""
@@ -240,6 +267,8 @@ class LatexConverter:
         text = text.replace(r"\begin{document}", "")
         text = text.replace(r"\end{document}", "")
         text = replace_unsupported_graphics_references(text)
+        if not self.document_class.is_beamer:
+            text = self._articleize_beamer_fragment(text)
         return text.strip()
 
     def clean_body_fragments(self, fragments: Sequence[str]) -> list[str]:
@@ -260,7 +289,7 @@ class LatexConverter:
             *self.title_block_lines(title, show_date=show_date),
             "",
             r"\begin{document}",
-            r"\maketitle",
+            *self.title_page_lines(),
             "",
         ]
 
@@ -269,6 +298,22 @@ class LatexConverter:
 
     def _clean_body_fragment(self, fragment: str) -> str:
         return self.clean_body_fragment(fragment)
+
+    def _articleize_beamer_fragment(self, fragment: str) -> str:
+        text = re.sub(r"\\begin\{frame\}(?:\[[^\]]*\])?", "", fragment)
+        text = text.replace(r"\end{frame}", "")
+        text = re.sub(
+            r"\\frametitle\{([^{}\n]+)\}",
+            lambda match: r"\subsection*{" + match.group(1).strip() + "}",
+            text,
+        )
+        text = re.sub(
+            r"\\begin\{(?:alertblock|exampleblock|block)\}\{([^{}\n]+)\}",
+            lambda match: r"\paragraph{" + match.group(1).strip() + "}",
+            text,
+        )
+        text = re.sub(r"\\end\{(?:alertblock|exampleblock|block)\}", "", text)
+        return text
 
     def _escape_latex(self, text: str) -> str:
         text = self._strip_invalid_chars(text)

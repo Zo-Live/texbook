@@ -36,6 +36,7 @@ SYSTEM_PROMPT = """你是中文数学讲义的 LaTeX 整理助手。
 10. 表格如果行列结构清晰，转换为可编译的 tabular 或 array；如果是图片化表格、跨页表格或结构不可靠，输出 % TODO: table ... 注释并在 notes 说明。
 11. 当前不支持图片、图表或 figure 裁切资源输出；不要生成 \\includegraphics 或引用不存在的文件，改用 % TODO: figure pending_asset ... 注释。
 12. 边栏、多栏、旁注等复杂版面按自然阅读顺序整理；无法可靠合并时输出 % TODO: layout ... 注释，不要强行猜测。
+13. 必须遵守用户消息中给出的目标 document class 要求；只有目标为 Beamer 时才输出 frame、\\frametitle、block 等 Beamer 结构。
 """
 
 TITLE_SYSTEM_PROMPT = """你是中文数学讲义的标题整理助手。
@@ -51,7 +52,10 @@ TITLE_SYSTEM_PROMPT = """你是中文数学讲义的标题整理助手。
 """
 
 CHUNK_USER_TEMPLATE = """文档标题：{document_title}
+目标 document class：{document_class}
 当前分块：{chunk_index}/{total_chunks}
+
+{document_class_instruction}
 
 请把本分块页面整理成连续的 LaTeX 正文片段。
 辅助文本识别可能有断行、漏公式、符号误识别；页面图像优先级更高。{previous_latex_tail_section}{pages_text}"""
@@ -101,6 +105,8 @@ class PromptPreset:
             field_name="chunk_user_template",
             allowed_fields={
                 "document_title",
+                "document_class",
+                "document_class_instruction",
                 "chunk_index",
                 "total_chunks",
                 "previous_latex_tail_section",
@@ -109,6 +115,8 @@ class PromptPreset:
             required_fields={"pages_text"},
             sample_values={
                 "document_title": "示例标题",
+                "document_class": "ctexart",
+                "document_class_instruction": "目标文档类说明。",
                 "chunk_index": 1,
                 "total_chunks": 2,
                 "previous_latex_tail_section": "",

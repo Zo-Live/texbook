@@ -6,6 +6,7 @@ from pathlib import PurePosixPath
 from typing import Sequence
 
 from ..complex_content import collect_complex_content_candidates, complex_content_metadata
+from ..document_class import LatexDocumentClass
 from ..structure import StructureItemKind, StructurePlan, StructurePlanItem
 from .latex_converter import LatexConverter
 
@@ -38,29 +39,38 @@ class LatexProjectSection:
 class LatexProjectBuilder:
     """Build a basic multi-file LaTeX project from body fragments."""
 
-    def __init__(self, use_ctex: bool = True):
-        self.latex = LatexConverter(use_ctex=use_ctex)
+    def __init__(
+        self,
+        use_ctex: bool = True,
+        document_class: LatexDocumentClass | str | None = None,
+    ):
+        self.latex = LatexConverter(use_ctex=use_ctex, document_class=document_class)
 
     def build(
         self,
         *,
         title: str,
+        document_class: LatexDocumentClass | str | None = None,
         fragments: Sequence[str],
         notes: Sequence[str] | None = None,
         show_date: bool = False,
     ) -> LatexProjectResult:
         """Build a project with main.tex, preamble.tex, and chunk-based chapters."""
-        cleaned_fragments = self.latex.clean_body_fragments(fragments)
+        latex = self._latex_for(document_class)
+        cleaned_fragments = latex.clean_body_fragments(fragments)
         chapter_paths = self._chapter_paths(len(cleaned_fragments))
-        metadata = complex_content_metadata(
-            collect_complex_content_candidates(
-                fragments=cleaned_fragments,
-                notes=notes or [],
-            )
-        )
+        metadata = {
+            "document_class": latex.document_class.value,
+            **complex_content_metadata(
+                collect_complex_content_candidates(
+                    fragments=cleaned_fragments,
+                    notes=notes or [],
+                )
+            ),
+        }
 
         files: dict[PurePosixPath, str] = {
-            PurePosixPath("preamble.tex"): self._build_preamble(),
+            PurePosixPath("preamble.tex"): self._build_preamble(latex),
         }
         for path, fragment in zip(chapter_paths, cleaned_fragments):
             files[path] = self._ensure_trailing_newline(fragment)
@@ -68,6 +78,7 @@ class LatexProjectBuilder:
         entrypoint = PurePosixPath("main.tex")
         files[entrypoint] = self._build_main(
             title=title,
+            latex=latex,
             chapter_paths=chapter_paths,
             notes=notes or [],
             show_date=show_date,
@@ -83,19 +94,21 @@ class LatexProjectBuilder:
         self,
         *,
         title: str,
+        document_class: LatexDocumentClass | str | None = None,
         sections: Sequence[LatexProjectSection],
         structure_plan: StructurePlan,
         notes: Sequence[str] | None = None,
         show_date: bool = False,
     ) -> LatexProjectResult:
         """Build a project whose files follow a semantic structure plan."""
+        latex = self._latex_for(document_class)
         section_files = self._planned_section_files(sections)
         input_entries = [
             (section.item.kind, path)
             for section, path in zip(sections, section_files, strict=True)
         ]
         cleaned_section_fragments = [
-            self.latex.clean_body_fragments(section.fragments)
+            latex.clean_body_fragments(section.fragments)
             for section in sections
         ]
         all_fragments = [
@@ -104,6 +117,7 @@ class LatexProjectBuilder:
             for fragment in fragments
         ]
         metadata = {
+            "document_class": latex.document_class.value,
             "structure_plan": structure_plan.to_metadata(),
             **complex_content_metadata(
                 collect_complex_content_candidates(
@@ -114,7 +128,7 @@ class LatexProjectBuilder:
         }
 
         files: dict[PurePosixPath, str] = {
-            PurePosixPath("preamble.tex"): self._build_preamble(),
+            PurePosixPath("preamble.tex"): self._build_preamble(latex),
         }
         for section, path, fragments in zip(
             sections,
@@ -122,11 +136,12 @@ class LatexProjectBuilder:
             cleaned_section_fragments,
             strict=True,
         ):
-            files[path] = self._build_section_file(section, fragments)
+            files[path] = self._build_section_file(latex, section, fragments)
 
         entrypoint = PurePosixPath("main.tex")
         files[entrypoint] = self._build_main(
             title=title,
+            latex=latex,
             chapter_paths=[path for _, path in input_entries],
             notes=notes or [],
             show_date=show_date,
@@ -143,6 +158,7 @@ class LatexProjectBuilder:
         self,
         *,
         title: str,
+        latex: LatexConverter,
         chapter_paths: Sequence[PurePosixPath],
         notes: Sequence[str],
         show_date: bool,
@@ -150,16 +166,16 @@ class LatexProjectBuilder:
     ) -> str:
         lines = [
             "% !TEX program = xelatex",
-            self.latex.documentclass_line(),
+            latex.documentclass_line(),
             r"\input{preamble}",
             "",
-            *self.latex.title_block_lines(title, show_date=show_date),
+            *latex.title_block_lines(title, show_date=show_date),
             "",
             r"\begin{document}",
-            r"\maketitle",
+            *latex.title_page_lines(),
             "",
         ]
-        note_lines = self.latex.note_comment_lines(notes)
+        note_lines = latex.note_comment_lines(notes)
         if note_lines:
             lines.extend(note_lines)
             lines.append("")
@@ -180,8 +196,8 @@ class LatexProjectBuilder:
         lines.append("")
         return "\n".join(lines)
 
-    def _build_preamble(self) -> str:
-        return "\n".join([*self.latex.preamble_lines(), ""])
+    def _build_preamble(self, latex: LatexConverter) -> str:
+        return "\n".join([*latex.preamble_lines(), ""])
 
     def _chapter_paths(self, count: int) -> list[PurePosixPath]:
         if count == 0:
@@ -238,19 +254,37 @@ class LatexProjectBuilder:
 
     def _build_section_file(
         self,
+        latex: LatexConverter,
         section: LatexProjectSection,
         cleaned_fragments: Sequence[str],
     ) -> str:
         body = "\n\n".join(cleaned_fragments).strip()
-        titled_body = self._ensure_section_title(section.item, body)
+        titled_body = self._ensure_section_title(latex, section.item, body)
         return self._ensure_trailing_newline(titled_body)
 
-    def _ensure_section_title(self, item: StructurePlanItem, body: str) -> str:
-        if item.kind == StructureItemKind.frontmatter:
-            title_command = r"\section*{" + self.latex._escape_latex(item.title) + "}"
+    def _ensure_section_title(
+        self,
+        latex: LatexConverter,
+        item: StructurePlanItem,
+        body: str,
+    ) -> str:
+        if latex.document_class.is_beamer:
+            return body
+        if latex.document_class.is_book and item.kind != StructureItemKind.frontmatter:
+            title_name = "chapter"
         else:
-            title_command = r"\section{" + self.latex._escape_latex(item.title) + "}"
+            title_name = "section"
 
+        escaped_title = latex._escape_latex(item.title)
+        if item.kind == StructureItemKind.frontmatter:
+            title_command = rf"\{title_name}*{{{escaped_title}}}"
+        else:
+            title_command = rf"\{title_name}{{{escaped_title}}}"
+
+        if latex.document_class.is_book:
+            converted = self._promote_leading_section_to_chapter(body, item.title, latex)
+            if converted is not None:
+                return converted
         if self._starts_with_matching_section(body, item.title):
             return body
         if not body:
@@ -264,6 +298,30 @@ class LatexProjectBuilder:
         normalized_existing = " ".join(match.group(1).split())
         normalized_title = " ".join(title.split())
         return normalized_existing == normalized_title
+
+    def _promote_leading_section_to_chapter(
+        self,
+        body: str,
+        title: str,
+        latex: LatexConverter,
+    ) -> str | None:
+        match = _LEADING_SECTION_RE.match(body.strip())
+        if not match:
+            return None
+        normalized_existing = " ".join(match.group(1).split())
+        normalized_title = " ".join(title.split())
+        if normalized_existing != normalized_title:
+            return None
+        replacement = r"\chapter{" + latex._escape_latex(title) + "}"
+        return replacement + body.strip()[match.end() :]
+
+    def _latex_for(
+        self,
+        document_class: LatexDocumentClass | str | None,
+    ) -> LatexConverter:
+        if document_class is None:
+            return self.latex
+        return LatexConverter(document_class=document_class)
 
     def _input_path(self, path: PurePosixPath) -> str:
         return str(path.with_suffix(""))

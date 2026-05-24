@@ -10,6 +10,12 @@ from pathlib import Path
 from threading import Event, Thread
 from typing import Iterable, Iterator, Protocol, Sequence, TextIO
 
+from ..document_class import (
+    DocumentClassMode,
+    DocumentClassResult,
+    LatexDocumentClass,
+    manual_document_class_result,
+)
 from ..convert.latex_converter import LatexConverter
 from ..convert.project import LatexProjectBuilder, LatexProjectResult, LatexProjectSection
 from ..extract.base import ImageRenderOptions, PdfDocumentChunk, PdfPageContext
@@ -27,8 +33,13 @@ from ..structure import (
     normalize_llm_structure_plan,
     summarize_pages_for_structure,
 )
-from .cache import ChunkCacheOptions, ChunkCacheRun, StructurePlanCacheRun
-from .client import LLMChunkResult, LLMStructurePlanResult
+from .cache import (
+    ChunkCacheOptions,
+    ChunkCacheRun,
+    DocumentClassCacheRun,
+    StructurePlanCacheRun,
+)
+from .client import LLMChunkResult, LLMDocumentClassResult, LLMStructurePlanResult
 from .presets import PromptPreset, default_prompt_preset
 from .scheduler import LLMScheduler, ProgressEvent, ProgressReporter
 
@@ -40,6 +51,7 @@ class LatexChunkClient(Protocol):
         self,
         *,
         document_title: str,
+        document_class: LatexDocumentClass = LatexDocumentClass.ctexart,
         pages: Sequence[PdfPageContext],
         chunk_index: int,
         total_chunks: int,
@@ -58,6 +70,16 @@ class LatexChunkClient(Protocol):
         prompt_preset: PromptPreset | None = None,
     ) -> str:
         """Generate a document title from collected conversion evidence."""
+
+    def generate_document_class(
+        self,
+        *,
+        document_title: str,
+        evidence: StructureEvidence,
+        pages: Sequence[PdfPageContext] = (),
+        extra_prompt: str = "",
+    ) -> LLMDocumentClassResult:
+        """Generate a target LaTeX document class."""
 
     def generate_structure_plan(
         self,
@@ -85,6 +107,7 @@ class _CollectedConversion:
     """Shared output collected before final LaTeX assembly."""
 
     title: str
+    document_class_result: DocumentClassResult
     fragments: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -94,6 +117,7 @@ class _CollectedProjectConversion:
     """Project conversion output grouped by semantic sections."""
 
     title: str
+    document_class_result: DocumentClassResult
     sections: list[LatexProjectSection] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     structure_plan: StructurePlan | None = None
@@ -117,6 +141,7 @@ class LLMPdfConverter:
         title_source: str = "filename",
         manual_title: str | None = None,
         show_date: bool = False,
+        document_class: DocumentClassMode | str = DocumentClassMode.auto,
         structure_options: StructurePlannerOptions | None = None,
         progress_stream: TextIO | None = None,
         progress_interval: float = 0.1,
@@ -131,6 +156,11 @@ class LLMPdfConverter:
             raise ValueError("prefetch_chunks must be non-negative.")
         if title_source not in {"filename", "llm"}:
             raise ValueError("title_source must be filename or llm.")
+        resolved_document_class = (
+            document_class
+            if isinstance(document_class, DocumentClassMode)
+            else DocumentClassMode.from_value(str(document_class))
+        )
 
         resolved_manual_title = None
         if manual_title is not None:
@@ -157,6 +187,7 @@ class LLMPdfConverter:
         self.title_source = title_source
         self.manual_title = resolved_manual_title
         self.show_date = show_date
+        self.document_class_mode = resolved_document_class
         self.structure_options = structure_options or StructurePlannerOptions(
             mode=StructureMode.auto
         )
@@ -174,7 +205,9 @@ class LLMPdfConverter:
     ) -> LLMConversionResult:
         collected = self._collect_conversion(pdf_path, pages=pages)
         return LLMConversionResult(
-            latex=self.document_builder.convert_fragments(
+            latex=LatexConverter(
+                document_class=collected.document_class_result.document_class
+            ).convert_fragments(
                 title=collected.title,
                 fragments=collected.fragments,
                 notes=collected.notes,
@@ -194,6 +227,7 @@ class LLMPdfConverter:
             collected = self._collect_conversion(pdf_path, pages=pages)
             return self.project_builder.build(
                 title=collected.title,
+                document_class=collected.document_class_result.document_class,
                 fragments=collected.fragments,
                 notes=collected.notes,
                 show_date=self.show_date,
@@ -203,6 +237,7 @@ class LLMPdfConverter:
         if collected.structure_plan is None:
             return self.project_builder.build(
                 title=collected.title,
+                document_class=collected.document_class_result.document_class,
                 fragments=[
                     fragment
                     for section in collected.sections
@@ -213,6 +248,7 @@ class LLMPdfConverter:
             )
         return self.project_builder.build_from_plan(
             title=collected.title,
+            document_class=collected.document_class_result.document_class,
             sections=collected.sections,
             structure_plan=collected.structure_plan,
             notes=collected.notes,
@@ -233,6 +269,7 @@ class LLMPdfConverter:
         title_evidence = _TitleEvidenceCollector(filename_title=fallback_title)
         saw_chunk = False
         cache_run: ChunkCacheRun | None = None
+        document_class_result: DocumentClassResult | None = None
 
         chunks = self.extractor.iter_context_chunks(
             pdf_path,
@@ -249,6 +286,12 @@ class LLMPdfConverter:
                 if not saw_chunk:
                     fallback_title = chunk.title
                     working_title = self.manual_title or fallback_title
+                    document_class_result = self._resolve_document_class(
+                        pdf_path=pdf_path,
+                        fallback_title=fallback_title,
+                        working_title=working_title,
+                        pages=pages,
+                    )
                     title_evidence = _TitleEvidenceCollector(
                         filename_title=fallback_title,
                     )
@@ -264,6 +307,7 @@ class LLMPdfConverter:
                             extra_prompt=self.extra_prompt,
                             prompt_preset=self.prompt_preset,
                             title_source=self.title_source,
+                            document_class=document_class_result.document_class,
                         )
                 saw_chunk = True
                 try:
@@ -288,6 +332,7 @@ class LLMPdfConverter:
                                 },
                                 request=lambda chunk=chunk, previous_latex_tail=previous_latex_tail: self.client.generate_latex_chunk(
                                     document_title=working_title,
+                                    document_class=document_class_result.document_class,
                                     pages=chunk.pages,
                                     chunk_index=chunk.chunk_index,
                                     total_chunks=chunk.total_chunks,
@@ -326,6 +371,8 @@ class LLMPdfConverter:
 
         if not saw_chunk:
             raise ValueError("No pages were selected for conversion.")
+        if document_class_result is None:
+            raise ValueError("Document class was not resolved.")
 
         document_title = self._resolve_document_title(
             fallback_title=fallback_title,
@@ -334,8 +381,9 @@ class LLMPdfConverter:
         )
         return _CollectedConversion(
             title=document_title,
+            document_class_result=document_class_result,
             fragments=fragments,
-            notes=notes,
+            notes=[*document_class_result.notes, *notes],
         )
 
     def _collect_project_conversion(
@@ -351,6 +399,12 @@ class LLMPdfConverter:
         selected_pages = evidence.effective_pages
         if not selected_pages:
             raise ValueError("No pages were selected for conversion.")
+        document_class_result = self._resolve_document_class_from_evidence(
+            pdf_path=pdf_path,
+            evidence=evidence,
+            document_title=working_title,
+            pages=pages,
+        )
 
         structure_cache_run: StructurePlanCacheRun | None = None
         if self.cache_options is not None:
@@ -399,6 +453,7 @@ class LLMPdfConverter:
                 prompt_preset=self.prompt_preset,
                 title_source=self.title_source,
                 structure_plan=structure_plan,
+                document_class=document_class_result.document_class,
             )
 
         total_chunks = sum(len(groups) for _, groups in chunk_groups)
@@ -432,6 +487,7 @@ class LLMPdfConverter:
                                 },
                                 request=lambda chunk=chunk, previous_latex_tail=previous_latex_tail: self.client.generate_latex_chunk(
                                     document_title=working_title,
+                                    document_class=document_class_result.document_class,
                                     pages=chunk.pages,
                                     chunk_index=chunk_index,
                                     total_chunks=total_chunks,
@@ -472,9 +528,112 @@ class LLMPdfConverter:
         )
         return _CollectedProjectConversion(
             title=document_title,
+            document_class_result=document_class_result,
             sections=sections,
-            notes=[*plan_notes, *notes],
+            notes=[*document_class_result.notes, *plan_notes, *notes],
             structure_plan=None if fallback_plan_used else structure_plan,
+        )
+
+    def _resolve_document_class(
+        self,
+        *,
+        pdf_path: Path,
+        fallback_title: str,
+        working_title: str,
+        pages: Sequence[int] | None,
+    ) -> DocumentClassResult:
+        evidence = self.extractor.extract_structure_evidence(pdf_path, pages=pages)
+        if not evidence.effective_pages:
+            raise ValueError("No pages were selected for conversion.")
+        return self._resolve_document_class_from_evidence(
+            pdf_path=pdf_path,
+            evidence=evidence,
+            document_title=working_title or fallback_title,
+            pages=pages,
+        )
+
+    def _resolve_document_class_from_evidence(
+        self,
+        *,
+        pdf_path: Path,
+        evidence: StructureEvidence,
+        document_title: str,
+        pages: Sequence[int] | None,
+    ) -> DocumentClassResult:
+        manual_class = self.document_class_mode.resolved_class()
+        if manual_class is not None:
+            return manual_document_class_result(manual_class)
+
+        page_numbers = evidence.effective_pages[: min(self.structure_options.chunk_pages, 8)]
+        class_pages = self._load_structure_pages(
+            pdf_path,
+            page_numbers=page_numbers,
+        )
+        cache_run: DocumentClassCacheRun | None = None
+        if self.cache_options is not None:
+            cache_run = DocumentClassCacheRun(
+                options=self.cache_options,
+                pdf_path=pdf_path,
+                pages=pages,
+                document_title=document_title,
+                image_dpi=self.image_dpi,
+                image_options=self.image_options,
+                extra_prompt=self.extra_prompt,
+                evidence=evidence,
+            )
+        try:
+            result = (
+                cache_run.read(pages=class_pages)
+                if cache_run is not None
+                else None
+            )
+            if result is None:
+                with self.progress_spinner.spin("Waiting for LLM document class"):
+                    result = self.scheduler.run(
+                        operation="document_class",
+                        label="document class",
+                        metadata={
+                            "pages": [page.page_number for page in class_pages],
+                        },
+                        request=lambda: self.client.generate_document_class(
+                            document_title=document_title,
+                            evidence=evidence,
+                            pages=class_pages,
+                            extra_prompt=self.extra_prompt,
+                        ),
+                    )
+                normalized = result.normalized()
+                if cache_run is not None:
+                    cache_run.write(
+                        pages=class_pages,
+                        result=result,
+                        normalized_result=normalized,
+                    )
+                return self._with_document_class_note(normalized)
+
+            self._emit_cache_hit(
+                operation="document_class",
+                label="document class",
+                metadata={"pages": [page.page_number for page in class_pages]},
+            )
+            return self._with_document_class_note(result.normalized())
+        finally:
+            _release_page_images(class_pages)
+
+    def _with_document_class_note(
+        self,
+        result: DocumentClassResult,
+    ) -> DocumentClassResult:
+        reason = f"document class: {result.document_class.value}"
+        if result.reason:
+            reason += f"（{result.reason}）"
+        notes = [reason, *result.notes]
+        return DocumentClassResult(
+            document_class=result.document_class,
+            confidence=result.confidence,
+            reason=result.reason,
+            notes=notes,
+            source=result.source,
         )
 
     def _resolve_structure_plan(

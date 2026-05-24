@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Sequence
 
+from ..document_class import LatexDocumentClass
 from ..extract.base import PdfPageContext
 from ..structure import StructureEvidence
 from .presets import (
@@ -15,6 +16,7 @@ from .presets import (
 def build_chunk_messages(
     *,
     document_title: str,
+    document_class: LatexDocumentClass = LatexDocumentClass.ctexart,
     pages: Sequence[PdfPageContext],
     chunk_index: int,
     total_chunks: int,
@@ -29,6 +31,7 @@ def build_chunk_messages(
             "type": "text",
             "text": _build_chunk_text(
                 document_title=document_title,
+                document_class=document_class,
                 pages=pages,
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
@@ -95,6 +98,73 @@ def build_title_messages(
     return [
         {"role": "system", "content": system_content},
         {"role": "user", "content": user_text},
+    ]
+
+
+DOCUMENT_CLASS_SYSTEM_PROMPT = """你是中文数学资料的 LaTeX 文档类判断助手。
+
+任务：根据 PDF 页面图像、文本层、书签、页面标题和文件名，判断最适合生成的 LaTeX document class。
+
+硬性要求：
+1. 只输出 JSON 对象，不要输出 Markdown 代码块。
+2. JSON 格式必须为 {"document_class": "...", "confidence": 0.0, "reason": "...", "notes": []}。
+3. document_class 只能是 article、book、beamer、ctexart、ctexbook、ctexbeamer 之一。
+4. 中文数学教材、讲义、幻灯片优先选择 CTeX 类。
+5. 连续页面呈现幻灯片画幅、页脚导航、frame 标题或 Beamer 增量页时，选择 ctexbeamer 或 beamer。
+6. 以章、节为主的长篇教材选择 ctexbook 或 book；短篇讲义、文章、讲义节选选择 ctexart 或 article。
+7. 不要转写正文，不要输出 LaTeX。
+"""
+
+
+def build_document_class_messages(
+    *,
+    document_title: str,
+    evidence: StructureEvidence,
+    pages: Sequence[PdfPageContext] = (),
+    extra_prompt: str = "",
+) -> List[Dict[str, Any]]:
+    """Build OpenAI-compatible messages for document class selection."""
+    user_content: List[Dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": _build_document_class_text(
+                document_title=document_title,
+                evidence=evidence,
+                pages=pages,
+            ),
+        }
+    ]
+
+    for page in pages:
+        if not page.image_base64:
+            continue
+        user_content.append(
+            {
+                "type": "text",
+                "text": f"下面是第 {page.page_number} 页的页面图像，只用于判断文档类型：",
+            }
+        )
+        user_content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": (
+                        f"data:{page.image_mime_type};base64,{page.image_base64}"
+                    )
+                },
+            }
+        )
+
+    return [
+        {
+            "role": "system",
+            "content": _with_extra_prompt(
+                DOCUMENT_CLASS_SYSTEM_PROMPT,
+                preset_extra_prompt="",
+                runtime_extra_prompt=extra_prompt,
+            ),
+        },
+        {"role": "user", "content": user_content},
     ]
 
 
@@ -170,6 +240,7 @@ def build_structure_messages(
 def _build_chunk_text(
     *,
     document_title: str,
+    document_class: LatexDocumentClass,
     pages: Sequence[PdfPageContext],
     chunk_index: int,
     total_chunks: int,
@@ -185,10 +256,48 @@ def _build_chunk_text(
 
     return prompt_preset.chunk_user_template.format(
         document_title=document_title,
+        document_class=document_class.value,
+        document_class_instruction=_document_class_instruction(document_class),
         chunk_index=chunk_index,
         total_chunks=total_chunks,
         previous_latex_tail_section=previous_latex_tail_section,
         pages_text=_build_pages_text(pages),
+    )
+
+
+def _build_document_class_text(
+    *,
+    document_title: str,
+    evidence: StructureEvidence,
+    pages: Sequence[PdfPageContext],
+) -> str:
+    lines = [
+        f"文档标题：{document_title}",
+        "",
+        "请判断最适合的 LaTeX document class。",
+        "",
+        evidence.format_for_llm(max_chars=12000),
+    ]
+    if pages:
+        lines.extend(["", "当前发送页面的文本块：", _build_pages_text(pages)])
+    return "\n".join(lines)
+
+
+def _document_class_instruction(document_class: LatexDocumentClass) -> str:
+    if document_class.is_beamer:
+        return (
+            "目标文档类是 Beamer。正文片段应保留幻灯片边界，使用 frame、"
+            "\\frametitle、block、exampleblock 等 Beamer 可编译结构；"
+            "长页内容应拆成多个 frame 或使用 [allowframebreaks]，避免单页溢出。"
+        )
+    if document_class.is_book:
+        return (
+            "目标文档类是 book/ctexbook。正文片段应使用 chapter/section 层级，"
+            "不得输出 Beamer 专属 frame、\\frametitle 或 block 环境。"
+        )
+    return (
+        "目标文档类是 article/ctexart。正文片段应使用 section/subsection 层级，"
+        "不得输出 Beamer 专属 frame、\\frametitle 或 block 环境。"
     )
 
 
