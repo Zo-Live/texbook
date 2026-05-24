@@ -457,7 +457,10 @@ def _validate_batch_targets(
             )
         seen[resolved] = job.pdf
         if project:
-            _validate_project_output_target(job.target, force=force)
+            try:
+                _validate_project_output_target(job.target, force=force)
+            except ValueError as exc:
+                raise click.ClickException(str(exc)) from exc
 
 
 def _run_batch_job(

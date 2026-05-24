@@ -15,6 +15,7 @@ from texbook.extract.base import (
 )
 from texbook.structure import (
     BookmarkEntry,
+    PageHeadingCandidate,
     StructureEvidence,
     StructureMode,
     StructurePlannerOptions,
@@ -33,9 +34,10 @@ from texbook.llm.scheduler import LLMScheduler, RetryOptions
 
 
 class FakeExtractor:
-    def __init__(self, pages, *, bookmarks=None):
+    def __init__(self, pages, *, bookmarks=None, heading_candidates=None):
         self.pages = pages
         self.bookmarks = bookmarks or []
+        self.heading_candidates = heading_candidates or []
         self.calls = []
         self.chunks = []
         self.structure_calls = []
@@ -95,7 +97,7 @@ class FakeExtractor:
             total_pages=len(self.pages),
             selected_pages=selected_pages,
             bookmarks=list(self.bookmarks),
-            heading_candidates=[],
+            heading_candidates=list(self.heading_candidates),
             page_starts={
                 page.page_number: page.plain_text[:300]
                 for page in self.pages
@@ -539,6 +541,45 @@ def test_project_output_uses_valid_bookmark_structure_plan():
     assert project.files[PurePosixPath("chapters/chapter02.tex")].startswith(
         r"\section{第二章 映射}"
     )
+
+
+def test_project_output_uses_local_heading_plan_without_llm_structure_call():
+    pages = [
+        PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),
+        PdfPageContext(page_number=2, width=1, height=1, image_base64="page-2"),
+        PdfPageContext(page_number=3, width=1, height=1, image_base64="page-3"),
+        PdfPageContext(page_number=4, width=1, height=1, image_base64="page-4"),
+    ]
+    extractor = FakeExtractor(
+        pages,
+        heading_candidates=[
+            PageHeadingCandidate(page_number=1, text="第一章 集合", font_size=20),
+            PageHeadingCandidate(page_number=3, text="第二章 映射", font_size=20),
+        ],
+    )
+    client = FakeClient(latex_fragments=["集合正文", "映射正文"])
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=2,
+        structure_options=StructurePlannerOptions(mode=StructureMode.local),
+    )
+
+    project = converter.convert_project(Path("docs/sample.pdf"))
+
+    main = project.files[PurePosixPath("main.tex")]
+    assert client.structure_calls == []
+    assert [call["pages"] for call in client.calls] == [[1, 2], [3, 4]]
+    assert project.metadata["structure_plan"]["source"] == "local-headings"
+    assert r"\input{chapters/chapter01}" in main
+    assert r"\input{chapters/chapter02}" in main
+    assert project.files[PurePosixPath("chapters/chapter01.tex")].startswith(
+        r"\section{第一章 集合}"
+    )
+    assert project.files[PurePosixPath("chapters/chapter02.tex")].startswith(
+        r"\section{第二章 映射}"
+    )
+    assert any("置信度较低" in note for note in project.notes)
 
 
 def test_project_output_continues_llm_structure_planning_when_more_pages_needed():
@@ -1214,7 +1255,17 @@ def test_project_reuses_cached_structure_plan(tmp_path):
 
     assert first_client.structure_calls
     assert "第一章" in first_project.files[PurePosixPath("chapters/chapter01.tex")]
+    assert len(list(cache_options.cache_dir.rglob("evidence.json"))) == 1
+    assert len(list(cache_options.cache_dir.rglob("structure-fallback.json"))) == 0
     assert len(list(cache_options.cache_dir.rglob("structure-headings-01.json"))) == 1
+    assert len(list(cache_options.cache_dir.rglob("chunk-*.json"))) == 1
+    structure_payload = json.loads(
+        next(cache_options.cache_dir.rglob("structure-headings-01.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert structure_payload["normalized_plan"]["source"] == "llm-headings"
+    assert structure_payload["result"]["status"] == "complete"
 
     second_client = RaisingClient()
     second_converter = LLMPdfConverter(

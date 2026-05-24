@@ -823,6 +823,33 @@ def test_batch_project_writes_each_pdf_to_own_project(tmp_path, monkeypatch):
     assert "b.pdf: note b" in result.output
 
 
+def test_batch_project_rejects_nonempty_target_before_conversion(tmp_path, monkeypatch):
+    input_dir = tmp_path / "docs"
+    input_dir.mkdir()
+    (input_dir / "book.pdf").write_bytes(b"book")
+    output_dir = tmp_path / "out"
+    project_dir = output_dir / "book"
+    project_dir.mkdir(parents=True)
+    existing = project_dir / "existing.txt"
+    existing.write_text("keep", encoding="utf-8")
+
+    def fail_build_converter(**kwargs):
+        raise AssertionError("converter should not be built")
+
+    monkeypatch.setattr(cli_module, "_build_converter", fail_build_converter)
+
+    result = runner.invoke(
+        app,
+        ["batch", str(input_dir), "--project", "-o", str(output_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert "非空" in result.output
+    assert existing.read_text(encoding="utf-8") == "keep"
+    assert not (project_dir / "main.tex").exists()
+    assert "Traceback" not in result.output
+
+
 def test_batch_workers_process_files_concurrently(tmp_path, monkeypatch):
     input_dir = tmp_path / "docs"
     input_dir.mkdir()

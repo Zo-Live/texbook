@@ -222,6 +222,13 @@ uv run pytest
 uv run ruff check
 ```
 
+阶段验收需要真实转换时，优先使用少量页 PDF，避免误处理完整教材：
+
+```bash
+uv run texbook extract "docs/6.1 集合与映射.pdf" --project --structure off --pages 7 -o "stage9-smoke" --force
+latexmk src/stage9-smoke/main.tex
+```
+
 ## 许可证
 
 MIT
