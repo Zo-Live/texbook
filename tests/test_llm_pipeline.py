@@ -29,6 +29,7 @@ from texbook.llm.pipeline import (
     _tail,
 )
 from texbook.llm.presets import PromptPreset, default_prompt_preset
+from texbook.llm.scheduler import LLMScheduler, RetryOptions
 
 
 class FakeExtractor:
@@ -235,6 +236,31 @@ class FailingSecondChunkClient(FakeClient):
     def generate_latex_chunk(self, **kwargs):
         if kwargs["chunk_index"] == 2:
             raise RuntimeError("LLM failed")
+        return super().generate_latex_chunk(**kwargs)
+
+
+class RetryableFailingSecondChunkClient(FakeClient):
+    class RateLimitError(RuntimeError):
+        status_code = 429
+
+    def generate_latex_chunk(self, **kwargs):
+        if kwargs["chunk_index"] == 2:
+            raise self.RateLimitError("rate limited")
+        return super().generate_latex_chunk(**kwargs)
+
+
+class TransientSecondChunkClient(FakeClient):
+    class RateLimitError(RuntimeError):
+        status_code = 429
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.failures = 0
+
+    def generate_latex_chunk(self, **kwargs):
+        if kwargs["chunk_index"] == 2 and self.failures == 0:
+            self.failures += 1
+            raise self.RateLimitError("rate limited")
         return super().generate_latex_chunk(**kwargs)
 
 
@@ -811,6 +837,44 @@ def test_pipeline_skips_spinner_for_cached_chunk(tmp_path):
     assert stream.getvalue() == ""
 
 
+def test_pipeline_emits_progress_for_uncached_and_cached_chunks(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_options = ChunkCacheOptions(
+        cache_dir=tmp_path / "cache",
+        llm_model="test-model",
+    )
+    first_events = []
+    first_converter = LLMPdfConverter(
+        FakeClient(latex_fragments=["cached"]),
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+        progress_reporter=first_events.append,
+    )
+
+    first_converter.convert(pdf_path)
+
+    assert [event.kind for event in first_events] == [
+        "request_started",
+        "request_completed",
+    ]
+
+    second_events = []
+    second_converter = LLMPdfConverter(
+        RaisingClient(),
+        extractor=FakeExtractor([_page(1, image_base64="page-1")]),
+        chunk_pages=1,
+        cache_options=cache_options,
+        progress_reporter=second_events.append,
+    )
+
+    second_converter.convert(pdf_path)
+
+    assert [event.kind for event in second_events] == ["cache_hit"]
+    assert second_events[0].operation == "chunk"
+
+
 def test_pipeline_reuses_chunk_cache_after_successful_run(tmp_path):
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_bytes(b"sample-pdf-bytes")
@@ -947,6 +1011,91 @@ def test_pipeline_reuses_completed_cache_after_later_chunk_failure(tmp_path):
     assert second_client.calls[0]["previous_latex_tail"] == _tail("first-cached")
     assert "first-cached" in second_result.latex
     assert "second-fresh" in second_result.latex
+
+
+def test_pipeline_retries_recoverable_chunk_failure():
+    pages = [
+        PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),
+        PdfPageContext(page_number=2, width=1, height=1, image_base64="page-2"),
+    ]
+    client = TransientSecondChunkClient(
+        latex_fragments=[
+            "first",
+            "second-after-retry",
+        ]
+    )
+    events = []
+    scheduler = LLMScheduler(
+        retry_options=RetryOptions(retries=1, initial_delay=0.0, max_delay=0.0),
+        reporter=events.append,
+    )
+    converter = LLMPdfConverter(
+        client,
+        extractor=FakeExtractor(pages),
+        chunk_pages=1,
+        scheduler=scheduler,
+        progress_reporter=events.append,
+    )
+
+    result = converter.convert(Path("docs/sample.pdf"))
+
+    assert "second-after-retry" in result.latex
+    assert client.failures == 1
+    assert "retry_scheduled" in [event.kind for event in events]
+    assert client.calls[-1]["previous_latex_tail"] == _tail("first")
+
+
+def test_pipeline_keeps_successful_cache_when_retry_exhausts_later_chunk(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    cache_options = ChunkCacheOptions(
+        cache_dir=tmp_path / "cache",
+        llm_model="test-model",
+    )
+    first_client = RetryableFailingSecondChunkClient(
+        latex_fragments=[
+            "first-cached",
+            "unused",
+        ]
+    )
+    first_converter = LLMPdfConverter(
+        first_client,
+        extractor=FakeExtractor(
+            [_page(1, image_base64="page-1"), _page(2, image_base64="page-2")]
+        ),
+        chunk_pages=1,
+        cache_options=cache_options,
+        scheduler=LLMScheduler(
+            retry_options=RetryOptions(retries=1, initial_delay=0.0, max_delay=0.0)
+        ),
+    )
+
+    with pytest.raises(RetryableFailingSecondChunkClient.RateLimitError):
+        first_converter.convert(pdf_path)
+
+    assert len(list(cache_options.cache_dir.rglob("chunk-*.json"))) == 1
+
+    second_client = FakeClient(
+        latex_fragments=[
+            "unused",
+            "second-fresh",
+        ]
+    )
+    second_converter = LLMPdfConverter(
+        second_client,
+        extractor=FakeExtractor(
+            [_page(1, image_base64="page-1"), _page(2, image_base64="page-2")]
+        ),
+        chunk_pages=1,
+        cache_options=cache_options,
+    )
+
+    result = second_converter.convert(pdf_path)
+
+    assert len(second_client.calls) == 1
+    assert second_client.calls[0]["chunk_index"] == 2
+    assert "first-cached" in result.latex
+    assert "second-fresh" in result.latex
 
 
 def test_pipeline_misses_later_cache_when_previous_tail_changes(tmp_path):

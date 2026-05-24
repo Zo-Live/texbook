@@ -1,6 +1,7 @@
 """Tests for CLI helper behavior."""
 
 from pathlib import PurePosixPath
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -228,6 +229,32 @@ def test_build_converter_passes_temperature_to_client_and_cache(tmp_path):
     assert converter.cache_options.llm_temperature == 0.2
 
 
+def test_build_converter_accepts_scheduler_options(tmp_path):
+    converter = _build_converter(
+        model="test-model",
+        api_key="test-key",
+        base_url=None,
+        temperature=1.0,
+        timeout=10.0,
+        max_tokens=128,
+        chunk_pages=2,
+        image_dpi=144,
+        cache_dir=tmp_path / "cache",
+        llm_retries=4,
+        llm_retry_initial_delay=0.5,
+        llm_retry_max_delay=3.0,
+        llm_max_concurrency=2,
+        llm_min_request_interval=0.25,
+        client=DummyClient(),
+    )
+
+    assert converter.scheduler.retry_options.retries == 4
+    assert converter.scheduler.retry_options.initial_delay == 0.5
+    assert converter.scheduler.retry_options.max_delay == 3.0
+    assert converter.scheduler.rate_limiter.max_concurrency == 2
+    assert converter.scheduler.rate_limiter.min_request_interval == 0.25
+
+
 def test_build_converter_supports_cache_controls(tmp_path):
     disabled = _build_converter(
         model="test-model",
@@ -353,6 +380,38 @@ def test_build_converter_rejects_non_positive_timeout():
         )
 
 
+def test_build_converter_rejects_invalid_scheduler_options(tmp_path):
+    with pytest.raises(typer.BadParameter, match="retries"):
+        _build_converter(
+            model="test-model",
+            api_key="test-key",
+            base_url=None,
+            temperature=1.0,
+            timeout=10.0,
+            max_tokens=128,
+            chunk_pages=2,
+            image_dpi=144,
+            cache_dir=tmp_path / "cache",
+            llm_retries=-1,
+            client=DummyClient(),
+        )
+
+    with pytest.raises(typer.BadParameter, match="concurrency"):
+        _build_converter(
+            model="test-model",
+            api_key="test-key",
+            base_url=None,
+            temperature=1.0,
+            timeout=10.0,
+            max_tokens=128,
+            chunk_pages=2,
+            image_dpi=144,
+            cache_dir=tmp_path / "cache",
+            llm_max_concurrency=0,
+            client=DummyClient(),
+        )
+
+
 def test_presets_cli_lists_builtin_preset():
     result = runner.invoke(app, ["presets", "list"])
 
@@ -379,6 +438,18 @@ def test_conversion_commands_expose_project_options(command):
     assert "--structure" in result.output
     assert "--structure-chunk" in result.output
     assert "--structure-max" in result.output
+
+
+@pytest.mark.parametrize("command", ["extract", "batch"])
+def test_conversion_commands_expose_scheduler_options(command):
+    result = runner.invoke(app, [command, "--help"])
+
+    assert result.exit_code == 0
+    assert "--llm-retries" in result.output
+    assert "--llm-max-concurr" in result.output
+    assert "--llm-min-request" in result.output
+    if command == "batch":
+        assert "--batch-workers" in result.output
 
 
 def test_presets_cli_adds_and_shows_repository_preset(tmp_path, monkeypatch):
@@ -750,6 +821,68 @@ def test_batch_project_writes_each_pdf_to_own_project(tmp_path, monkeypatch):
     assert not (output_dir / "a.tex").exists()
     assert "a.pdf: 入口文件" in result.output
     assert "b.pdf: note b" in result.output
+
+
+def test_batch_workers_process_files_concurrently(tmp_path, monkeypatch):
+    input_dir = tmp_path / "docs"
+    input_dir.mkdir()
+    (input_dir / "a.pdf").write_bytes(b"a")
+    (input_dir / "b.pdf").write_bytes(b"b")
+    output_dir = tmp_path / "out"
+    first_entered = threading.Event()
+    second_entered = threading.Event()
+    release = threading.Event()
+    calls = []
+    calls_lock = threading.Lock()
+
+    class BatchConverter:
+        def convert(self, pdf_path, *, pages=None):
+            with calls_lock:
+                calls.append(pdf_path.name)
+                call_count = len(calls)
+            if call_count == 1:
+                first_entered.set()
+                assert second_entered.wait(timeout=1)
+                release.set()
+            else:
+                second_entered.set()
+                assert first_entered.wait(timeout=1)
+                assert release.wait(timeout=1)
+            return SimpleNamespace(latex=f"% converted {pdf_path.name}", notes=[])
+
+    monkeypatch.setattr(cli_module, "_build_converter", lambda **kwargs: BatchConverter())
+
+    result = runner.invoke(
+        app,
+        ["batch", str(input_dir), "-o", str(output_dir), "--batch-workers", "2"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sorted(calls) == ["a.pdf", "b.pdf"]
+    assert (output_dir / "a.tex").exists()
+    assert (output_dir / "b.tex").exists()
+
+
+def test_batch_rejects_duplicate_output_targets_before_conversion(tmp_path, monkeypatch):
+    input_dir = tmp_path / "docs"
+    input_dir.mkdir()
+    (input_dir / "a.pdf").write_bytes(b"a")
+    (input_dir / "a.PDF").write_bytes(b"b")
+    output_dir = tmp_path / "out"
+
+    def fail_build_converter(**kwargs):
+        raise AssertionError("converter should not be built")
+
+    monkeypatch.setattr(cli_module, "_build_converter", fail_build_converter)
+
+    result = runner.invoke(
+        app,
+        ["batch", str(input_dir), "-o", str(output_dir), "--pattern", "a.*"],
+    )
+
+    assert result.exit_code == 1
+    assert "collision" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_batch_project_continues_after_single_failure(tmp_path, monkeypatch):

@@ -1,10 +1,13 @@
 """CLI entry point for texbook."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import shutil
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from threading import Lock
+from typing import Callable, Optional
 
 import click
 import typer
@@ -24,6 +27,7 @@ from .llm.presets import (
     load_prompt_preset,
     save_prompt_preset,
 )
+from .llm.scheduler import LLMRateLimiter, LLMScheduler, ProgressEvent, RetryOptions
 from .structure import StructureMode, StructurePlannerOptions
 
 
@@ -41,6 +45,81 @@ class StructureOption(str, Enum):
     off = "off"
     local = "local"
     llm = "llm"
+
+
+@dataclass(frozen=True)
+class _CliSchedulerOptions:
+    retries: int = 2
+    retry_initial_delay: float = 2.0
+    retry_max_delay: float = 30.0
+    max_concurrency: int = 1
+    min_request_interval: float = 0.0
+
+
+class _CliProgressReporter:
+    def __init__(self):
+        self._lock = Lock()
+
+    def __call__(self, event: ProgressEvent) -> None:
+        message = _format_progress_event(event)
+        if not message:
+            return
+        with self._lock:
+            typer.echo(message, err=True)
+
+
+def _format_progress_event(event: ProgressEvent) -> str:
+    if event.kind == "batch_item_started":
+        return f"Processing: {event.label}"
+    if event.kind == "batch_item_failed":
+        return f"Failed: {event.label}: {event.error}"
+    if event.kind == "cache_hit":
+        return f"Cache hit: {event.label or event.operation}"
+    if event.kind == "retry_scheduled":
+        delay = event.delay or 0.0
+        return (
+            f"Retrying {event.label or event.operation} after {delay:.1f}s "
+            f"(attempt {event.attempt}/{event.max_attempts}): {event.error}"
+        )
+    if event.kind == "request_failed":
+        return f"Failed {event.label or event.operation}: {event.error}"
+    return ""
+
+
+def _build_llm_scheduler(
+    *,
+    llm_retries: int,
+    llm_retry_initial_delay: float,
+    llm_retry_max_delay: float,
+    llm_max_concurrency: int,
+    llm_min_request_interval: float,
+    progress_reporter: Optional[Callable[[ProgressEvent], None]] = None,
+) -> LLMScheduler:
+    try:
+        scheduler_options = _CliSchedulerOptions(
+            retries=llm_retries,
+            retry_initial_delay=llm_retry_initial_delay,
+            retry_max_delay=llm_retry_max_delay,
+            max_concurrency=llm_max_concurrency,
+            min_request_interval=llm_min_request_interval,
+        )
+        retry_options = RetryOptions(
+            retries=scheduler_options.retries,
+            initial_delay=scheduler_options.retry_initial_delay,
+            max_delay=scheduler_options.retry_max_delay,
+        )
+        rate_limiter = LLMRateLimiter(
+            max_concurrency=scheduler_options.max_concurrency,
+            min_request_interval=scheduler_options.min_request_interval,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    return LLMScheduler(
+        retry_options=retry_options,
+        rate_limiter=rate_limiter,
+        reporter=progress_reporter,
+    )
 
 
 def _repo_root() -> Path:
@@ -235,6 +314,13 @@ def _build_converter(
     structure_chunk_pages: int = 8,
     structure_max_pages: int = 32,
     client: Optional[OpenAICompatibleClient] = None,
+    scheduler: Optional[LLMScheduler] = None,
+    progress_reporter: Optional[Callable[[ProgressEvent], None]] = None,
+    llm_retries: int = 2,
+    llm_retry_initial_delay: float = 2.0,
+    llm_retry_max_delay: float = 30.0,
+    llm_max_concurrency: int = 1,
+    llm_min_request_interval: float = 0.0,
 ) -> LLMPdfConverter:
     try:
         resolved_title_source = (
@@ -285,6 +371,14 @@ def _build_converter(
         raise typer.BadParameter(str(exc)) from exc
 
     llm_client = client or OpenAICompatibleClient(config)
+    llm_scheduler = scheduler or _build_llm_scheduler(
+        llm_retries=llm_retries,
+        llm_retry_initial_delay=llm_retry_initial_delay,
+        llm_retry_max_delay=llm_retry_max_delay,
+        llm_max_concurrency=llm_max_concurrency,
+        llm_min_request_interval=llm_min_request_interval,
+        progress_reporter=progress_reporter,
+    )
     cache_options = None
     if not no_cache:
         cache_options = ChunkCacheOptions(
@@ -308,6 +402,8 @@ def _build_converter(
         manual_title=resolved_manual_title,
         show_date=show_date,
         structure_options=structure_options,
+        scheduler=llm_scheduler,
+        progress_reporter=progress_reporter,
     )
 
 
@@ -329,6 +425,69 @@ def _describe_cli_error(exc: Exception) -> str:
     if isinstance(exc, OSError):
         return message or exc.__class__.__name__
     return message or exc.__class__.__name__
+
+
+@dataclass(frozen=True)
+class _BatchJob:
+    pdf: Path
+    target: Path
+
+
+@dataclass(frozen=True)
+class _BatchJobResult:
+    pdf: Path
+    entrypoint: Path | None = None
+    notes: tuple[str, ...] = ()
+
+
+def _validate_batch_targets(
+    jobs: list[_BatchJob],
+    *,
+    project: bool,
+    force: bool,
+) -> None:
+    seen: dict[Path, Path] = {}
+    for job in jobs:
+        resolved = job.target.resolve(strict=False)
+        existing = seen.get(resolved)
+        if existing is not None:
+            raise click.ClickException(
+                f"Output target collision: {existing.name} and {job.pdf.name} "
+                f"would both write to {job.target}"
+            )
+        seen[resolved] = job.pdf
+        if project:
+            _validate_project_output_target(job.target, force=force)
+
+
+def _run_batch_job(
+    *,
+    job: _BatchJob,
+    build_converter: Callable[[], LLMPdfConverter],
+    project: bool,
+    page_selection: list[int] | None,
+    force: bool,
+) -> _BatchJobResult:
+    converter = build_converter()
+    if project:
+        project_result = converter.convert_project(job.pdf, pages=page_selection)
+        entrypoint = _write_project_result(
+            project_result,
+            job.target,
+            force=force,
+        )
+        return _BatchJobResult(
+            pdf=job.pdf,
+            entrypoint=entrypoint,
+            notes=tuple(project_result.notes),
+        )
+
+    result = converter.convert(job.pdf, pages=page_selection)
+    job.target.write_text(result.latex, encoding="utf-8")
+    return _BatchJobResult(
+        pdf=job.pdf,
+        notes=tuple(result.notes),
+    )
 
 
 @presets_app.command("list")
@@ -560,6 +719,27 @@ def extract(
     prefetch_chunks: int = typer.Option(
         1, "--prefetch-chunks", help="Number of future chunks to pre-render"
     ),
+    llm_retries: int = typer.Option(
+        2, "--llm-retries", help="Retries for recoverable LLM request failures"
+    ),
+    llm_retry_initial_delay: float = typer.Option(
+        2.0,
+        "--llm-retry-initial-delay",
+        help="Initial retry delay in seconds for recoverable LLM failures",
+    ),
+    llm_retry_max_delay: float = typer.Option(
+        30.0,
+        "--llm-retry-max-delay",
+        help="Maximum retry delay in seconds for recoverable LLM failures",
+    ),
+    llm_max_concurrency: int = typer.Option(
+        1, "--llm-max-concurrency", help="Maximum concurrent LLM requests"
+    ),
+    llm_min_request_interval: float = typer.Option(
+        0.0,
+        "--llm-min-request-interval",
+        help="Minimum seconds between LLM request starts",
+    ),
     cache_dir: Path = typer.Option(
         Path("build/.texbook_cache"),
         "--cache-dir",
@@ -591,6 +771,7 @@ def extract(
         raise typer.BadParameter("--structure 只能与 --project 一起使用。")
 
     page_selection = _parse_pages(pages)
+    progress_reporter = _CliProgressReporter()
     converter = _build_converter(
         model=model,
         api_key=api_key,
@@ -616,6 +797,12 @@ def extract(
         structure=structure,
         structure_chunk_pages=structure_chunk_pages,
         structure_max_pages=structure_max_pages,
+        progress_reporter=progress_reporter,
+        llm_retries=llm_retries,
+        llm_retry_initial_delay=llm_retry_initial_delay,
+        llm_retry_max_delay=llm_retry_max_delay,
+        llm_max_concurrency=llm_max_concurrency,
+        llm_min_request_interval=llm_min_request_interval,
     )
     try:
         if project:
@@ -764,6 +951,32 @@ def batch(
     prefetch_chunks: int = typer.Option(
         1, "--prefetch-chunks", help="Number of future chunks to pre-render"
     ),
+    llm_retries: int = typer.Option(
+        2, "--llm-retries", help="Retries for recoverable LLM request failures"
+    ),
+    llm_retry_initial_delay: float = typer.Option(
+        2.0,
+        "--llm-retry-initial-delay",
+        help="Initial retry delay in seconds for recoverable LLM failures",
+    ),
+    llm_retry_max_delay: float = typer.Option(
+        30.0,
+        "--llm-retry-max-delay",
+        help="Maximum retry delay in seconds for recoverable LLM failures",
+    ),
+    llm_max_concurrency: int = typer.Option(
+        1, "--llm-max-concurrency", help="Maximum concurrent LLM requests"
+    ),
+    llm_min_request_interval: float = typer.Option(
+        0.0,
+        "--llm-min-request-interval",
+        help="Minimum seconds between LLM request starts",
+    ),
+    batch_workers: int = typer.Option(
+        1,
+        "--batch-workers",
+        help="Number of PDF files to convert concurrently in batch mode",
+    ),
     cache_dir: Path = typer.Option(
         Path("build/.texbook_cache"),
         "--cache-dir",
@@ -791,32 +1004,9 @@ def batch(
         raise typer.BadParameter("--force 只能与 --project 一起使用。")
     if not project and structure != StructureOption.auto:
         raise typer.BadParameter("--structure 只能与 --project 一起使用。")
+    if batch_workers <= 0:
+        raise typer.BadParameter("--batch-workers must be positive.")
 
-    converter = _build_converter(
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        temperature=temperature,
-        timeout=timeout,
-        max_tokens=max_tokens,
-        chunk_pages=chunk_pages,
-        image_dpi=image_dpi,
-        image_dpi_min=image_dpi_min,
-        image_dpi_max=image_dpi_max,
-        image_format=image_format,
-        jpeg_quality=jpeg_quality,
-        prefetch_chunks=prefetch_chunks,
-        cache_dir=cache_dir,
-        no_cache=no_cache,
-        clear_cache=clear_cache,
-        extra_prompt=extra_prompt,
-        preset=preset,
-        title_source=title_source,
-        show_date=show_date,
-        structure=structure,
-        structure_chunk_pages=structure_chunk_pages,
-        structure_max_pages=structure_max_pages,
-    )
     output_dir = _resolve_output_dir(output_dir)
     page_selection = _parse_pages(pages)
     try:
@@ -831,36 +1021,138 @@ def batch(
         typer.echo(f"No files found matching '{pattern}' in {directory}", err=True)
         raise typer.Exit(1)
 
+    jobs = [
+        _BatchJob(
+            pdf=pdf,
+            target=(output_dir / pdf.stem if project else output_dir / f"{pdf.stem}.tex"),
+        )
+        for pdf in pdf_files
+    ]
+    _validate_batch_targets(jobs, project=project, force=force)
+
+    progress_reporter = _CliProgressReporter()
+    shared_scheduler = _build_llm_scheduler(
+        llm_retries=llm_retries,
+        llm_retry_initial_delay=llm_retry_initial_delay,
+        llm_retry_max_delay=llm_retry_max_delay,
+        llm_max_concurrency=llm_max_concurrency,
+        llm_min_request_interval=llm_min_request_interval,
+        progress_reporter=progress_reporter,
+    )
+
+    def build_converter() -> LLMPdfConverter:
+        return _build_converter(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            chunk_pages=chunk_pages,
+            image_dpi=image_dpi,
+            image_dpi_min=image_dpi_min,
+            image_dpi_max=image_dpi_max,
+            image_format=image_format,
+            jpeg_quality=jpeg_quality,
+            prefetch_chunks=prefetch_chunks,
+            cache_dir=cache_dir,
+            no_cache=no_cache,
+            clear_cache=clear_cache,
+            extra_prompt=extra_prompt,
+            preset=preset,
+            title_source=title_source,
+            show_date=show_date,
+            structure=structure,
+            structure_chunk_pages=structure_chunk_pages,
+            structure_max_pages=structure_max_pages,
+            scheduler=shared_scheduler,
+            progress_reporter=progress_reporter,
+            llm_retries=llm_retries,
+            llm_retry_initial_delay=llm_retry_initial_delay,
+            llm_retry_max_delay=llm_retry_max_delay,
+            llm_max_concurrency=llm_max_concurrency,
+            llm_min_request_interval=llm_min_request_interval,
+        )
+
     failures: list[tuple[Path, str]] = []
     written_count = 0
-    for pdf in pdf_files:
-        typer.echo(f"Processing: {pdf.name}", err=True)
-        try:
-            if project:
-                project_dir = output_dir / pdf.stem
-                _validate_project_output_target(project_dir, force=force)
-                project_result = converter.convert_project(pdf, pages=page_selection)
-                entrypoint = _write_project_result(
-                    project_result,
-                    project_dir,
+
+    def handle_success(job_result: _BatchJobResult) -> None:
+        nonlocal written_count
+        written_count += 1
+        progress_reporter(
+            ProgressEvent(
+                kind="batch_item_completed",
+                operation="batch",
+                label=job_result.pdf.name,
+            )
+        )
+        if project and job_result.entrypoint is not None:
+            typer.echo(f"{job_result.pdf.name}: 入口文件：{job_result.entrypoint}", err=True)
+        for note in job_result.notes:
+            typer.echo(f"{job_result.pdf.name}: {note}", err=True)
+
+    def handle_failure(pdf: Path, exc: Exception) -> None:
+        reason = _describe_cli_error(exc)
+        failures.append((pdf, reason))
+        progress_reporter(
+            ProgressEvent(
+                kind="batch_item_failed",
+                operation="batch",
+                label=pdf.name,
+                error=reason,
+            )
+        )
+
+    if batch_workers == 1:
+        for job in jobs:
+            progress_reporter(
+                ProgressEvent(
+                    kind="batch_item_started",
+                    operation="batch",
+                    label=job.pdf.name,
+                )
+            )
+            try:
+                handle_success(
+                    _run_batch_job(
+                        job=job,
+                        build_converter=build_converter,
+                        project=project,
+                        page_selection=page_selection,
+                        force=force,
+                    )
+                )
+            except Exception as exc:
+                handle_failure(job.pdf, exc)
+                continue
+    else:
+        with ThreadPoolExecutor(max_workers=batch_workers) as executor:
+            future_jobs = {}
+            for job in jobs:
+                progress_reporter(
+                    ProgressEvent(
+                        kind="batch_item_started",
+                        operation="batch",
+                        label=job.pdf.name,
+                    )
+                )
+                future = executor.submit(
+                    _run_batch_job,
+                    job=job,
+                    build_converter=build_converter,
+                    project=project,
+                    page_selection=page_selection,
                     force=force,
                 )
-                notes = project_result.notes
-                typer.echo(f"{pdf.name}: 入口文件：{entrypoint}", err=True)
-            else:
-                result = converter.convert(pdf, pages=page_selection)
-                tex_path = output_dir / f"{pdf.stem}.tex"
-                tex_path.write_text(result.latex, encoding="utf-8")
-                notes = result.notes
-        except Exception as exc:
-            reason = _describe_cli_error(exc)
-            failures.append((pdf, reason))
-            typer.echo(f"Failed: {pdf.name}: {reason}", err=True)
-            continue
+                future_jobs[future] = job
 
-        written_count += 1
-        for note in notes:
-            typer.echo(f"{pdf.name}: {note}", err=True)
+            for future in as_completed(future_jobs):
+                job = future_jobs[future]
+                try:
+                    handle_success(future.result())
+                except Exception as exc:
+                    handle_failure(job.pdf, exc)
 
     if failures:
         typer.echo(

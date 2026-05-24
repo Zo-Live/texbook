@@ -30,6 +30,7 @@ from ..structure import (
 from .cache import ChunkCacheOptions, ChunkCacheRun, StructurePlanCacheRun
 from .client import LLMChunkResult, LLMStructurePlanResult
 from .presets import PromptPreset, default_prompt_preset
+from .scheduler import LLMScheduler, ProgressEvent, ProgressReporter
 
 
 class LatexChunkClient(Protocol):
@@ -119,6 +120,8 @@ class LLMPdfConverter:
         structure_options: StructurePlannerOptions | None = None,
         progress_stream: TextIO | None = None,
         progress_interval: float = 0.1,
+        scheduler: LLMScheduler | None = None,
+        progress_reporter: ProgressReporter | None = None,
     ):
         if chunk_pages <= 0:
             raise ValueError("chunk_pages must be positive.")
@@ -157,7 +160,9 @@ class LLMPdfConverter:
         self.structure_options = structure_options or StructurePlannerOptions(
             mode=StructureMode.auto
         )
+        self.progress_reporter = progress_reporter
         self.progress_spinner = _LlmWaitSpinner(progress_stream, progress_interval)
+        self.scheduler = scheduler or LLMScheduler(reporter=progress_reporter)
         self.document_builder = LatexConverter()
         self.project_builder = LatexProjectBuilder()
 
@@ -273,17 +278,36 @@ class LLMPdfConverter:
                             f"{chunk.chunk_index}/{chunk.total_chunks}"
                         )
                         with self.progress_spinner.spin(message):
-                            result = self.client.generate_latex_chunk(
-                                document_title=working_title,
-                                pages=chunk.pages,
-                                chunk_index=chunk.chunk_index,
-                                total_chunks=chunk.total_chunks,
-                                previous_latex_tail=previous_latex_tail,
-                                extra_prompt=self.extra_prompt,
-                                prompt_preset=self.prompt_preset,
+                            result = self.scheduler.run(
+                                operation="chunk",
+                                label=f"chunk {chunk.chunk_index}/{chunk.total_chunks}",
+                                metadata={
+                                    "chunk_index": chunk.chunk_index,
+                                    "total_chunks": chunk.total_chunks,
+                                    "pages": [page.page_number for page in chunk.pages],
+                                },
+                                request=lambda chunk=chunk, previous_latex_tail=previous_latex_tail: self.client.generate_latex_chunk(
+                                    document_title=working_title,
+                                    pages=chunk.pages,
+                                    chunk_index=chunk.chunk_index,
+                                    total_chunks=chunk.total_chunks,
+                                    previous_latex_tail=previous_latex_tail,
+                                    extra_prompt=self.extra_prompt,
+                                    prompt_preset=self.prompt_preset,
+                                ),
                             )
                         if cache_run is not None:
                             cache_run.write(chunk, previous_latex_tail, result)
+                    else:
+                        self._emit_cache_hit(
+                            operation="chunk",
+                            label=f"chunk {chunk.chunk_index}/{chunk.total_chunks}",
+                            metadata={
+                                "chunk_index": chunk.chunk_index,
+                                "total_chunks": chunk.total_chunks,
+                                "pages": [page.page_number for page in chunk.pages],
+                            },
+                        )
                 finally:
                     _release_page_images(chunk.pages)
 
@@ -398,17 +422,36 @@ class LLMPdfConverter:
                     if result is None:
                         message = f"Waiting for LLM chunk {chunk_index}/{total_chunks}"
                         with self.progress_spinner.spin(message):
-                            result = self.client.generate_latex_chunk(
-                                document_title=working_title,
-                                pages=chunk.pages,
-                                chunk_index=chunk_index,
-                                total_chunks=total_chunks,
-                                previous_latex_tail=previous_latex_tail,
-                                extra_prompt=self.extra_prompt,
-                                prompt_preset=self.prompt_preset,
+                            result = self.scheduler.run(
+                                operation="chunk",
+                                label=f"chunk {chunk_index}/{total_chunks}",
+                                metadata={
+                                    "chunk_index": chunk_index,
+                                    "total_chunks": total_chunks,
+                                    "pages": [page.page_number for page in chunk.pages],
+                                },
+                                request=lambda chunk=chunk, previous_latex_tail=previous_latex_tail: self.client.generate_latex_chunk(
+                                    document_title=working_title,
+                                    pages=chunk.pages,
+                                    chunk_index=chunk_index,
+                                    total_chunks=total_chunks,
+                                    previous_latex_tail=previous_latex_tail,
+                                    extra_prompt=self.extra_prompt,
+                                    prompt_preset=self.prompt_preset,
+                                ),
                             )
                         if cache_run is not None:
                             cache_run.write(chunk, previous_latex_tail, result)
+                    else:
+                        self._emit_cache_hit(
+                            operation="chunk",
+                            label=f"chunk {chunk_index}/{total_chunks}",
+                            metadata={
+                                "chunk_index": chunk_index,
+                                "total_chunks": total_chunks,
+                                "pages": [page.page_number for page in chunk.pages],
+                            },
+                        )
                 finally:
                     _release_page_images(chunk.pages)
 
@@ -539,14 +582,35 @@ class LLMPdfConverter:
                 )
                 if result is None:
                     with self.progress_spinner.spin("Waiting for LLM structure plan"):
-                        result = self.client.generate_structure_plan(
-                            document_title=document_title,
-                            evidence=evidence,
-                            pages=chunk_pages,
-                            inspected_pages=inspected_pages,
-                            stage="toc",
-                            extra_prompt=self.extra_prompt,
+                        result = self.scheduler.run(
+                            operation="structure",
+                            label=f"structure toc {request_index}",
+                            metadata={
+                                "stage": "toc",
+                                "request_index": request_index,
+                                "pages": [page.page_number for page in chunk_pages],
+                                "inspected_pages": list(inspected_pages),
+                            },
+                            request=lambda chunk_pages=chunk_pages, inspected_pages=tuple(inspected_pages): self.client.generate_structure_plan(
+                                document_title=document_title,
+                                evidence=evidence,
+                                pages=chunk_pages,
+                                inspected_pages=inspected_pages,
+                                stage="toc",
+                                extra_prompt=self.extra_prompt,
+                            ),
                         )
+                else:
+                    self._emit_cache_hit(
+                        operation="structure",
+                        label=f"structure toc {request_index}",
+                        metadata={
+                            "stage": "toc",
+                            "request_index": request_index,
+                            "pages": [page.page_number for page in chunk_pages],
+                            "inspected_pages": list(inspected_pages),
+                        },
+                    )
             finally:
                 _release_page_images(chunk_pages)
 
@@ -593,14 +657,35 @@ class LLMPdfConverter:
         )
         if heading_result is None:
             with self.progress_spinner.spin("Waiting for LLM heading structure plan"):
-                heading_result = self.client.generate_structure_plan(
-                    document_title=document_title,
-                    evidence=evidence,
-                    pages=[],
-                    inspected_pages=inspected_pages,
-                    stage="headings",
-                    extra_prompt=self.extra_prompt,
+                heading_result = self.scheduler.run(
+                    operation="structure",
+                    label="structure headings 1",
+                    metadata={
+                        "stage": "headings",
+                        "request_index": 1,
+                        "pages": [],
+                        "inspected_pages": list(inspected_pages),
+                    },
+                    request=lambda inspected_pages=tuple(inspected_pages): self.client.generate_structure_plan(
+                        document_title=document_title,
+                        evidence=evidence,
+                        pages=[],
+                        inspected_pages=inspected_pages,
+                        stage="headings",
+                        extra_prompt=self.extra_prompt,
+                    ),
                 )
+        else:
+            self._emit_cache_hit(
+                operation="structure",
+                label="structure headings 1",
+                metadata={
+                    "stage": "headings",
+                    "request_index": 1,
+                    "pages": [],
+                    "inspected_pages": list(inspected_pages),
+                },
+            )
         if heading_result.status != "complete":
             if cache_run is not None:
                 cache_run.write(
@@ -705,16 +790,36 @@ class LLMPdfConverter:
 
         try:
             with self.progress_spinner.spin("Waiting for LLM title"):
-                title = self.client.generate_document_title(
-                    fallback_title=fallback_title,
-                    title_evidence=title_evidence,
-                    extra_prompt=self.extra_prompt,
-                    prompt_preset=self.prompt_preset,
+                title = self.scheduler.run(
+                    operation="title",
+                    label="document title",
+                    request=lambda: self.client.generate_document_title(
+                        fallback_title=fallback_title,
+                        title_evidence=title_evidence,
+                        extra_prompt=self.extra_prompt,
+                        prompt_preset=self.prompt_preset,
+                    ),
                 )
         except Exception:
             return fallback_title
 
         return _normalize_title_text(title) or fallback_title
+
+    def _emit_cache_hit(
+        self,
+        *,
+        operation: str,
+        label: str,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        self.scheduler.emit(
+            ProgressEvent(
+                kind="cache_hit",
+                operation=operation,
+                label=label,
+                metadata=dict(metadata or {}),
+            )
+        )
 
 
 def _chunk_pages(

@@ -160,6 +160,11 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 - `--image-format`：页面图像格式，支持 `png`、`jpeg`、`jpg`、`auto`。
 - `--jpeg-quality`：JPEG 图像质量，默认 `85`。
 - `--prefetch-chunks`：预渲染后续 chunk 数，默认 `1`；LLM 请求仍顺序发送。
+- `--llm-retries`：可恢复 LLM 请求失败的重试次数，默认 `2`。
+- `--llm-retry-initial-delay`、`--llm-retry-max-delay`：LLM 请求重试退避秒数，默认 `2.0` 与 `30.0`。
+- `--llm-max-concurrency`：全局 LLM 请求最大并发数，默认 `1`。
+- `--llm-min-request-interval`：LLM 请求开始之间的最小间隔秒数，默认 `0.0`。
+- `batch --batch-workers`：批量模式中同时处理的 PDF 文件数，默认 `1`。
 - `--timeout`：LLM 响应读取超时秒数，默认不限制等待时间。
 - `--max-tokens`：LLM 响应最大 token 数，默认 `128000`。
 - `--temperature`：LLM 采样温度，默认 `1.0`；`extract` 和 `batch` 都支持。
@@ -173,6 +178,8 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 - `--clear-cache`：清理当前 PDF 和参数对应的缓存后再转换。
 
 断点续传缓存默认启用。项目模式下，相同 PDF、页码、模型、prompt、图片参数和结构规划参数重跑时会复用结构规划结果，避免大型教材重复规划；正文转换会继续复用已完成 chunk。中途失败后再次运行可从已完成规划或 chunk 继续。缓存目录中会保留 `evidence.json`、`structure-*.json` 等结构规划中间产物，便于检查书签、标题线索、LLM 规划响应和最终结构计划。等待未命中缓存的 LLM 请求时，交互式终端会在 stderr 显示加载提示，stdout 仍只输出 LaTeX，便于重定向。
+
+单个 PDF 的正文 chunk 会继续顺序发送给 LLM，因为后续 chunk 会收到前序 LaTeX 尾部作为上下文；`--prefetch-chunks` 只提前渲染页面图像。大量文件转换时可以用 `batch --batch-workers N` 做文件级并发，并用 `--llm-max-concurrency` 与 `--llm-min-request-interval` 控制共享 LLM 请求节奏。可恢复错误包括网络、超时、限流和服务端临时错误；已成功的结构规划和正文 chunk 会立即写入缓存，重新运行时继续复用。
 
 ## 复杂内容处理
 
