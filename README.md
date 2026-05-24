@@ -62,7 +62,17 @@ uv run texbook extract "input/lecture.pdf" -o "output/lecture.tex"
 
 只给 `-o` 文件名时，输出路径会解析到仓库根目录的 `src/` 下；带目录时按仓库根目录解析。路径包含空格时请使用引号。
 
-当前 `extract` 的 `-o` 始终表示单个 `.tex` 输出文件，不会根据路径后缀或目标路径是否为目录自动切换输出模式。目录化项目输出将使用显式入口 `extract --project -o <dir>`，实际写目录功能会在后续阶段加入。
+当前 `extract` 的 `-o` 始终表示单个 `.tex` 输出文件，不会根据路径后缀或目标路径是否为目录自动切换输出模式。目录化项目输出使用显式入口：
+
+```bash
+uv run texbook extract "input/lecture.pdf" --project -o "lecture-project"
+```
+
+只给 `-o` 项目名时，项目目录会解析到仓库根目录的 `src/` 下，例如 `src/lecture-project/main.tex`。项目模式默认只写入不存在或空目录；目标项目目录非空时会拒绝覆盖。确认要清空该项目目录并重新生成时，添加 `--force`：
+
+```bash
+uv run texbook extract "input/lecture.pdf" --project -o "lecture-project" --force
+```
 
 只转换部分页面：
 
@@ -84,6 +94,14 @@ uv run texbook batch input/ -o output/
 ```
 
 `batch` 默认匹配 `*.pdf`，并把每个 PDF 写成同名 `.tex`。单个文件失败时会记录原因并继续处理后续文件；如果没有匹配文件或存在失败文件，命令会以非零退出码结束。
+
+批量项目输出使用 `batch --project`，每个 PDF 写入独立项目目录：
+
+```bash
+uv run texbook batch input/ --project -o src/
+```
+
+例如 `input/book.pdf` 会写入 `src/book/main.tex`。`batch --project --force` 只会清空对应 PDF 的项目目录，不会清空整个输出父目录。
 
 ## 本地编译
 
@@ -137,6 +155,8 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 - `--timeout`：LLM 响应读取超时秒数，默认不限制等待时间。
 - `--max-tokens`：LLM 响应最大 token 数，默认 `128000`。
 - `--temperature`：LLM 采样温度，默认 `1.0`；`extract` 和 `batch` 都支持。
+- `--project`：输出目录化 LaTeX 项目；`extract` 需要同时指定 `-o <dir>`，`batch` 会为每个 PDF 创建独立项目目录。
+- `--force`：仅与 `--project` 一起使用，清空目标项目目录后重新写入。
 - `--cache-dir`：断点续传缓存目录，默认 `build/.texbook_cache/`。
 - `--no-cache`：禁用 chunk 缓存。
 - `--clear-cache`：清理当前 PDF 和参数对应的缓存后再转换。

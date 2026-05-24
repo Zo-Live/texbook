@@ -1,5 +1,6 @@
 """Tests for CLI helper behavior."""
 
+from pathlib import PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +8,7 @@ import typer
 from typer.testing import CliRunner
 
 from texbook import cli as cli_module
+from texbook.convert import LatexProjectResult
 from texbook.cli import TitleSource, _build_converter, _parse_pages, app
 from texbook.extract.base import DocumentExtractionError
 from texbook.llm.presets import PromptPreset, default_prompt_preset
@@ -367,6 +369,15 @@ def test_conversion_commands_expose_temperature_option(command):
     assert "--temperature" in result.output
 
 
+@pytest.mark.parametrize("command", ["extract", "batch"])
+def test_conversion_commands_expose_project_options(command):
+    result = runner.invoke(app, [command, "--help"])
+
+    assert result.exit_code == 0
+    assert "--project" in result.output
+    assert "--force" in result.output
+
+
 def test_presets_cli_adds_and_shows_repository_preset(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_module, "_repo_root", lambda: tmp_path)
 
@@ -407,6 +418,210 @@ def test_extract_cli_reports_conversion_failure_without_traceback(tmp_path, monk
     assert "unsupported or damaged" in result.output
 
 
+def test_extract_project_writes_project_files_and_entrypoint(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module, "_repo_root", lambda: tmp_path)
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+
+    class ProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            assert pdf_path == source
+            return LatexProjectResult(
+                files={
+                    PurePosixPath("main.tex"): r"\input{chapters/chapter01}",
+                    PurePosixPath("preamble.tex"): r"\usepackage{amsmath}",
+                    PurePosixPath("chapters/chapter01.tex"): r"\section{A}",
+                },
+                entrypoint=PurePosixPath("main.tex"),
+                notes=["note"],
+            )
+
+    monkeypatch.setattr(cli_module, "_build_converter", lambda **kwargs: ProjectConverter())
+
+    result = runner.invoke(app, ["extract", str(source), "--project", "-o", "book"])
+
+    project_dir = tmp_path / "src" / "book"
+    assert result.exit_code == 0, result.output
+    assert (project_dir / "main.tex").read_text(encoding="utf-8") == (
+        r"\input{chapters/chapter01}"
+    )
+    assert (project_dir / "preamble.tex").read_text(encoding="utf-8") == (
+        r"\usepackage{amsmath}"
+    )
+    assert (project_dir / "chapters" / "chapter01.tex").read_text(
+        encoding="utf-8"
+    ) == r"\section{A}"
+    assert f"入口文件：{project_dir / 'main.tex'}" in result.output
+    assert "Note: note" in result.output
+
+
+def test_extract_project_requires_output_before_conversion(tmp_path, monkeypatch):
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+
+    def fail_build_converter(**kwargs):
+        raise AssertionError("converter should not be built")
+
+    monkeypatch.setattr(cli_module, "_build_converter", fail_build_converter)
+
+    result = runner.invoke(app, ["extract", str(source), "--project"])
+
+    assert result.exit_code != 0
+    assert "-o" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_extract_rejects_force_without_project_before_conversion(tmp_path, monkeypatch):
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+
+    def fail_build_converter(**kwargs):
+        raise AssertionError("converter should not be built")
+
+    monkeypatch.setattr(cli_module, "_build_converter", fail_build_converter)
+
+    result = runner.invoke(app, ["extract", str(source), "--force"])
+
+    assert result.exit_code != 0
+    assert "--project" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_extract_project_rejects_nonempty_directory_without_force(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module, "_repo_root", lambda: tmp_path)
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+    project_dir = tmp_path / "src" / "book"
+    project_dir.mkdir(parents=True)
+    existing = project_dir / "existing.txt"
+    existing.write_text("keep", encoding="utf-8")
+
+    class ProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            raise AssertionError("conversion should not run for a blocked target")
+
+    monkeypatch.setattr(cli_module, "_build_converter", lambda **kwargs: ProjectConverter())
+
+    result = runner.invoke(app, ["extract", str(source), "--project", "-o", "book"])
+
+    assert result.exit_code == 1
+    assert "非空" in result.output
+    assert existing.read_text(encoding="utf-8") == "keep"
+    assert not (project_dir / "main.tex").exists()
+
+
+def test_extract_project_force_keeps_old_files_if_conversion_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module, "_repo_root", lambda: tmp_path)
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+    project_dir = tmp_path / "src" / "book"
+    project_dir.mkdir(parents=True)
+    existing = project_dir / "existing.txt"
+    existing.write_text("keep", encoding="utf-8")
+
+    class ProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            raise RuntimeError("LLM failed")
+
+    monkeypatch.setattr(cli_module, "_build_converter", lambda **kwargs: ProjectConverter())
+
+    result = runner.invoke(
+        app,
+        ["extract", str(source), "--project", "-o", "book", "--force"],
+    )
+
+    assert result.exit_code == 1
+    assert "LLM failed" in result.output
+    assert existing.read_text(encoding="utf-8") == "keep"
+
+
+def test_extract_project_force_clears_directory_before_writing(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module, "_repo_root", lambda: tmp_path)
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+    project_dir = tmp_path / "src" / "book"
+    (project_dir / "old").mkdir(parents=True)
+    (project_dir / "old" / "stale.txt").write_text("stale", encoding="utf-8")
+    (project_dir / "existing.txt").write_text("old", encoding="utf-8")
+
+    class ProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            return LatexProjectResult(
+                files={
+                    PurePosixPath("main.tex"): "new main",
+                    PurePosixPath("chapters/chapter01.tex"): "new chapter",
+                },
+                entrypoint=PurePosixPath("main.tex"),
+            )
+
+    monkeypatch.setattr(cli_module, "_build_converter", lambda **kwargs: ProjectConverter())
+
+    result = runner.invoke(
+        app,
+        ["extract", str(source), "--project", "-o", "book", "--force"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (project_dir / "main.tex").read_text(encoding="utf-8") == "new main"
+    assert (project_dir / "chapters" / "chapter01.tex").read_text(
+        encoding="utf-8"
+    ) == "new chapter"
+    assert not (project_dir / "existing.txt").exists()
+    assert not (project_dir / "old").exists()
+
+
+def test_extract_project_rejects_file_output_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module, "_repo_root", lambda: tmp_path)
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+    output_file = tmp_path / "src" / "book"
+    output_file.parent.mkdir()
+    output_file.write_text("not a directory", encoding="utf-8")
+
+    class ProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            return LatexProjectResult(
+                files={PurePosixPath("main.tex"): "new"},
+                entrypoint=PurePosixPath("main.tex"),
+            )
+
+    monkeypatch.setattr(cli_module, "_build_converter", lambda **kwargs: ProjectConverter())
+
+    result = runner.invoke(app, ["extract", str(source), "--project", "-o", "book"])
+
+    assert result.exit_code == 1
+    assert "不是目录" in result.output
+    assert output_file.read_text(encoding="utf-8") == "not a directory"
+
+
+def test_extract_project_force_rejects_protected_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module, "_repo_root", lambda: tmp_path)
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    sentinel = src_dir / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+
+    class ProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            return LatexProjectResult(
+                files={PurePosixPath("main.tex"): "new"},
+                entrypoint=PurePosixPath("main.tex"),
+            )
+
+    monkeypatch.setattr(cli_module, "_build_converter", lambda **kwargs: ProjectConverter())
+
+    result = runner.invoke(
+        app,
+        ["extract", str(source), "--project", "-o", str(src_dir), "--force"],
+    )
+
+    assert result.exit_code == 1
+    assert "受保护路径" in result.output
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
 def test_batch_cli_skips_failed_files_and_summarizes(tmp_path, monkeypatch):
     input_dir = tmp_path / "docs"
     input_dir.mkdir()
@@ -437,3 +652,127 @@ def test_batch_cli_skips_failed_files_and_summarizes(tmp_path, monkeypatch):
     assert "1 failed" in result.output
     assert "bad.pdf" in result.output
     assert "LLM failed" in result.output
+
+
+def test_batch_project_writes_each_pdf_to_own_project(tmp_path, monkeypatch):
+    input_dir = tmp_path / "docs"
+    input_dir.mkdir()
+    (input_dir / "a.pdf").write_bytes(b"a")
+    (input_dir / "b.pdf").write_bytes(b"b")
+    output_dir = tmp_path / "out"
+
+    class BatchProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            return LatexProjectResult(
+                files={
+                    PurePosixPath("main.tex"): f"% main {pdf_path.stem}",
+                    PurePosixPath("preamble.tex"): "% preamble",
+                },
+                entrypoint=PurePosixPath("main.tex"),
+                notes=[f"note {pdf_path.stem}"],
+            )
+
+    monkeypatch.setattr(
+        cli_module,
+        "_build_converter",
+        lambda **kwargs: BatchProjectConverter(),
+    )
+
+    result = runner.invoke(
+        app,
+        ["batch", str(input_dir), "--project", "-o", str(output_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (output_dir / "a" / "main.tex").read_text(encoding="utf-8") == "% main a"
+    assert (output_dir / "b" / "main.tex").read_text(encoding="utf-8") == "% main b"
+    assert not (output_dir / "a.tex").exists()
+    assert "a.pdf: 入口文件" in result.output
+    assert "b.pdf: note b" in result.output
+
+
+def test_batch_project_continues_after_single_failure(tmp_path, monkeypatch):
+    input_dir = tmp_path / "docs"
+    input_dir.mkdir()
+    (input_dir / "bad.pdf").write_bytes(b"bad")
+    (input_dir / "good.pdf").write_bytes(b"good")
+    output_dir = tmp_path / "out"
+
+    class BatchProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            if pdf_path.name == "bad.pdf":
+                raise RuntimeError("project failed")
+            return LatexProjectResult(
+                files={PurePosixPath("main.tex"): f"% {pdf_path.name}"},
+                entrypoint=PurePosixPath("main.tex"),
+            )
+
+    monkeypatch.setattr(
+        cli_module,
+        "_build_converter",
+        lambda **kwargs: BatchProjectConverter(),
+    )
+
+    result = runner.invoke(
+        app,
+        ["batch", str(input_dir), "--project", "-o", str(output_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert (output_dir / "good" / "main.tex").read_text(encoding="utf-8") == "% good.pdf"
+    assert not (output_dir / "bad").exists()
+    assert "1 files written" in result.output
+    assert "1 failed" in result.output
+    assert "project failed" in result.output
+
+
+def test_batch_project_force_only_clears_per_pdf_project_dir(tmp_path, monkeypatch):
+    input_dir = tmp_path / "docs"
+    input_dir.mkdir()
+    (input_dir / "book.pdf").write_bytes(b"book")
+    output_dir = tmp_path / "out"
+    project_dir = output_dir / "book"
+    project_dir.mkdir(parents=True)
+    (project_dir / "old.txt").write_text("old", encoding="utf-8")
+    unrelated = output_dir / "unrelated.txt"
+    unrelated.write_text("keep", encoding="utf-8")
+
+    class BatchProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            return LatexProjectResult(
+                files={PurePosixPath("main.tex"): "new"},
+                entrypoint=PurePosixPath("main.tex"),
+            )
+
+    monkeypatch.setattr(
+        cli_module,
+        "_build_converter",
+        lambda **kwargs: BatchProjectConverter(),
+    )
+
+    result = runner.invoke(
+        app,
+        ["batch", str(input_dir), "--project", "--force", "-o", str(output_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (project_dir / "main.tex").read_text(encoding="utf-8") == "new"
+    assert not (project_dir / "old.txt").exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+def test_batch_rejects_force_without_project_before_conversion(tmp_path, monkeypatch):
+    input_dir = tmp_path / "docs"
+    input_dir.mkdir()
+    (input_dir / "sample.pdf").write_bytes(b"pdf")
+
+    def fail_build_converter(**kwargs):
+        raise AssertionError("converter should not be built")
+
+    monkeypatch.setattr(cli_module, "_build_converter", fail_build_converter)
+
+    result = runner.invoke(app, ["batch", str(input_dir), "--force"])
+
+    assert result.exit_code != 0
+    assert "--project" in result.output
+    assert "Traceback" not in result.output

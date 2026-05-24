@@ -1,13 +1,15 @@
 """CLI entry point for texbook."""
 
 import json
+import shutil
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 import click
 import typer
 
+from .convert import LatexProjectResult
 from .extract.base import DocumentExtractionError, ImageRenderOptions
 from .llm.cache import ChunkCacheOptions
 from .llm.client import OpenAICompatibleClient
@@ -66,6 +68,91 @@ def _resolve_tex_output(path: Path) -> Path:
 def _resolve_output_dir(path: Path) -> Path:
     path = path.expanduser()
     return path if path.is_absolute() else _repo_root() / path
+
+
+def _resolve_project_output_dir(path: Path) -> Path:
+    path = path.expanduser()
+    if path.is_absolute():
+        return path
+
+    root = _repo_root()
+    if path.parent == Path("."):
+        return root / "src" / path
+    return root / path
+
+
+def _directory_has_entries(path: Path) -> bool:
+    return any(path.iterdir())
+
+
+def _assert_safe_project_directory(path: Path) -> None:
+    resolved = path.resolve(strict=False)
+    root = _repo_root().resolve()
+    protected = {
+        root,
+        root / "src",
+        root / "src" / "texbook",
+    }
+    package_dir = root / "src" / "texbook"
+    if resolved in protected or package_dir in resolved.parents:
+        raise ValueError(f"拒绝将项目目录写入受保护路径：{resolved}")
+    if (resolved / ".git").exists() or (resolved / "pyproject.toml").exists():
+        raise ValueError(f"拒绝清空疑似仓库或源码目录：{resolved}")
+
+
+def _clear_directory(path: Path) -> None:
+    for item in path.iterdir():
+        if item.is_dir() and not item.is_symlink():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+
+
+def _write_project_result(
+    project: LatexProjectResult,
+    target_dir: Path,
+    *,
+    force: bool = False,
+) -> Path:
+    target_dir = target_dir.expanduser()
+    _validate_project_output_target(target_dir, force=force)
+
+    if target_dir.exists() and _directory_has_entries(target_dir):
+        _clear_directory(target_dir)
+    else:
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+    for relative_path, content in project.files.items():
+        destination = _project_file_destination(target_dir, relative_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(content, encoding="utf-8")
+
+    return _project_file_destination(target_dir, project.entrypoint)
+
+
+def _validate_project_output_target(
+    target_dir: Path,
+    *,
+    force: bool,
+) -> None:
+    if target_dir.exists() and not target_dir.is_dir():
+        raise ValueError(f"项目输出路径已存在但不是目录：{target_dir}")
+
+    if target_dir.exists() and _directory_has_entries(target_dir):
+        if not force:
+            raise ValueError(
+                f"项目输出目录非空：{target_dir}。如需清空后重写，请添加 --force。"
+            )
+        _assert_safe_project_directory(target_dir)
+    else:
+        _assert_safe_project_directory(target_dir)
+
+
+def _project_file_destination(
+    target_dir: Path,
+    relative_path: PurePosixPath,
+) -> Path:
+    return target_dir.joinpath(*relative_path.parts)
 
 
 app = typer.Typer(
@@ -343,7 +430,20 @@ def extract(
         readable=True,
     ),
     output: Optional[Path] = typer.Option(
-        None, "-o", "--output", help="Output .tex file path (default: stdout)"
+        None,
+        "-o",
+        "--output",
+        help="Output .tex file path, or project directory with --project",
+    ),
+    project: bool = typer.Option(
+        False,
+        "--project",
+        help="Write a directory-style LaTeX project instead of one .tex file",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Clear an existing project output directory before writing",
     ),
     pages: Optional[str] = typer.Option(
         None, "--pages", help="Page selection such as 1,3-5 (1-based)"
@@ -445,6 +545,10 @@ def extract(
     pdf_path = _resolve_existing_path(pdf_path)
     if not pdf_path.is_file():
         raise typer.BadParameter(f"Not a file: {pdf_path}")
+    if project and output is None:
+        raise typer.BadParameter("--project 需要同时指定 -o/--output 项目目录。")
+    if force and not project:
+        raise typer.BadParameter("--force 只能与 --project 一起使用。")
 
     page_selection = _parse_pages(pages)
     converter = _build_converter(
@@ -471,17 +575,32 @@ def extract(
         show_date=show_date,
     )
     try:
-        result = converter.convert(pdf_path, pages=page_selection)
-        latex = result.latex
-
-        if output:
-            output = _resolve_tex_output(output)
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(latex, encoding="utf-8")
-            typer.echo(f"Written to {output}", err=True)
+        if project:
+            assert output is not None
+            project_dir = _resolve_project_output_dir(output)
+            _validate_project_output_target(project_dir, force=force)
+            project_result = converter.convert_project(pdf_path, pages=page_selection)
+            entrypoint = _write_project_result(
+                project_result,
+                project_dir,
+                force=force,
+            )
+            typer.echo(f"项目目录：{project_dir}", err=True)
+            typer.echo(f"入口文件：{entrypoint}", err=True)
+            notes = project_result.notes
         else:
-            typer.echo(latex)
-        for note in result.notes:
+            result = converter.convert(pdf_path, pages=page_selection)
+            latex = result.latex
+            if output:
+                output = _resolve_tex_output(output)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(latex, encoding="utf-8")
+                typer.echo(f"Written to {output}", err=True)
+            else:
+                typer.echo(latex)
+            notes = result.notes
+
+        for note in notes:
             typer.echo(f"Note: {note}", err=True)
     except Exception as exc:
         raise click.ClickException(_format_conversion_failure(pdf_path, exc)) from exc
@@ -496,7 +615,20 @@ def batch(
         dir_okay=True,
     ),
     output_dir: Path = typer.Option(
-        Path("src"), "-o", "--output-dir", help="Directory to write .tex files to"
+        Path("src"),
+        "-o",
+        "--output-dir",
+        help="Directory to write .tex files or project directories to",
+    ),
+    project: bool = typer.Option(
+        False,
+        "--project",
+        help="Write each PDF to its own directory-style LaTeX project",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Clear existing project directories before writing",
     ),
     pattern: str = typer.Option(
         "*.pdf", "--pattern", help="Glob pattern for PDF files"
@@ -592,10 +724,12 @@ def batch(
         None, "--extra-prompt", help="额外的系统提示文字（追加到默认要求之后）"
     ),
 ):
-    """Extract all matching PDFs in a directory to individual .tex files."""
+    """Extract all matching PDFs in a directory to LaTeX outputs."""
     directory = _resolve_existing_path(directory)
     if not directory.is_dir():
         raise typer.BadParameter(f"Not a directory: {directory}")
+    if force and not project:
+        raise typer.BadParameter("--force 只能与 --project 一起使用。")
 
     converter = _build_converter(
         model=model,
@@ -638,10 +772,22 @@ def batch(
     for pdf in pdf_files:
         typer.echo(f"Processing: {pdf.name}", err=True)
         try:
-            result = converter.convert(pdf, pages=page_selection)
-            latex = result.latex
-            tex_path = output_dir / f"{pdf.stem}.tex"
-            tex_path.write_text(latex, encoding="utf-8")
+            if project:
+                project_dir = output_dir / pdf.stem
+                _validate_project_output_target(project_dir, force=force)
+                project_result = converter.convert_project(pdf, pages=page_selection)
+                entrypoint = _write_project_result(
+                    project_result,
+                    project_dir,
+                    force=force,
+                )
+                notes = project_result.notes
+                typer.echo(f"{pdf.name}: 入口文件：{entrypoint}", err=True)
+            else:
+                result = converter.convert(pdf, pages=page_selection)
+                tex_path = output_dir / f"{pdf.stem}.tex"
+                tex_path.write_text(result.latex, encoding="utf-8")
+                notes = result.notes
         except Exception as exc:
             reason = _describe_cli_error(exc)
             failures.append((pdf, reason))
@@ -649,7 +795,7 @@ def batch(
             continue
 
         written_count += 1
-        for note in result.notes:
+        for note in notes:
             typer.echo(f"{pdf.name}: {note}", err=True)
 
     if failures:
