@@ -369,7 +369,7 @@ dist/
 input/*
 output/*
 docs/*
-src/*.tex
+src/**/*.tex
 .codex
 .claude
 .agents

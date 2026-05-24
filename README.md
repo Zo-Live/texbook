@@ -110,6 +110,7 @@ uv run texbook batch input/ --project -o src/
 ```bash
 latexmk src/test.tex
 latexmk "src/6.1 集合与映射.tex"
+latexmk src/lecture-project/main.tex
 ```
 
 也可以进入 `src/` 后运行：
@@ -118,9 +119,10 @@ latexmk "src/6.1 集合与映射.tex"
 cd src
 latexmk test.tex
 latexmk "6.1 集合与映射.tex"
+latexmk lecture-project/main.tex
 ```
 
-本地 `.latexmkrc` 使用 `xelatex`，把 PDF 输出到 `out/`，把辅助产物输出或归位到 `build/`。这些目录默认不进入 Git。
+本地 `.latexmkrc` 使用 `xelatex`，把 PDF 输出到 `out/`，把辅助产物输出或归位到 `build/`。`out/` 和 `build/` 会按入口文件相对 `src/` 的父目录镜像，例如 `src/test.tex` 生成 `out/test.pdf` 与 `build/test.*`，`src/lecture-project/main.tex` 生成 `out/lecture-project/main.pdf` 与 `build/lecture-project/main.*`。这些目录默认不进入 Git。
 
 ## 标题、日期和 Prompt 预设
 
