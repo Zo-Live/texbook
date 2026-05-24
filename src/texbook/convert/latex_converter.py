@@ -4,6 +4,7 @@ import re
 
 from typing import List, Sequence
 
+from ..complex_content import replace_unsupported_graphics_references
 from ..extract.base import ExtractedContent
 
 
@@ -238,6 +239,7 @@ class LatexConverter:
         text = _USEPACKAGE_RE.sub("", text)
         text = text.replace(r"\begin{document}", "")
         text = text.replace(r"\end{document}", "")
+        text = replace_unsupported_graphics_references(text)
         return text.strip()
 
     def clean_body_fragments(self, fragments: Sequence[str]) -> list[str]:

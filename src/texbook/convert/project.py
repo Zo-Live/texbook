@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Sequence
 
+from ..complex_content import collect_complex_content_candidates, complex_content_metadata
 from ..structure import StructureItemKind, StructurePlan, StructurePlanItem
 from .latex_converter import LatexConverter
 
@@ -51,6 +52,12 @@ class LatexProjectBuilder:
         """Build a project with main.tex, preamble.tex, and chunk-based chapters."""
         cleaned_fragments = self.latex.clean_body_fragments(fragments)
         chapter_paths = self._chapter_paths(len(cleaned_fragments))
+        metadata = complex_content_metadata(
+            collect_complex_content_candidates(
+                fragments=cleaned_fragments,
+                notes=notes or [],
+            )
+        )
 
         files: dict[PurePosixPath, str] = {
             PurePosixPath("preamble.tex"): self._build_preamble(),
@@ -69,7 +76,7 @@ class LatexProjectBuilder:
             files=files,
             entrypoint=entrypoint,
             notes=list(notes or []),
-            metadata={},
+            metadata=metadata,
         )
 
     def build_from_plan(
@@ -87,12 +94,35 @@ class LatexProjectBuilder:
             (section.item.kind, path)
             for section, path in zip(sections, section_files, strict=True)
         ]
+        cleaned_section_fragments = [
+            self.latex.clean_body_fragments(section.fragments)
+            for section in sections
+        ]
+        all_fragments = [
+            fragment
+            for fragments in cleaned_section_fragments
+            for fragment in fragments
+        ]
+        metadata = {
+            "structure_plan": structure_plan.to_metadata(),
+            **complex_content_metadata(
+                collect_complex_content_candidates(
+                    fragments=all_fragments,
+                    notes=notes or [],
+                )
+            ),
+        }
 
         files: dict[PurePosixPath, str] = {
             PurePosixPath("preamble.tex"): self._build_preamble(),
         }
-        for section, path in zip(sections, section_files, strict=True):
-            files[path] = self._build_section_file(section)
+        for section, path, fragments in zip(
+            sections,
+            section_files,
+            cleaned_section_fragments,
+            strict=True,
+        ):
+            files[path] = self._build_section_file(section, fragments)
 
         entrypoint = PurePosixPath("main.tex")
         files[entrypoint] = self._build_main(
@@ -106,7 +136,7 @@ class LatexProjectBuilder:
             files=files,
             entrypoint=entrypoint,
             notes=list(notes or []),
-            metadata={"structure_plan": structure_plan.to_metadata()},
+            metadata=metadata,
         )
 
     def _build_main(
@@ -206,8 +236,11 @@ class LatexProjectBuilder:
                 )
         return paths
 
-    def _build_section_file(self, section: LatexProjectSection) -> str:
-        cleaned_fragments = self.latex.clean_body_fragments(section.fragments)
+    def _build_section_file(
+        self,
+        section: LatexProjectSection,
+        cleaned_fragments: Sequence[str],
+    ) -> str:
         body = "\n\n".join(cleaned_fragments).strip()
         titled_body = self._ensure_section_title(section.item, body)
         return self._ensure_trailing_newline(titled_body)

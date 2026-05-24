@@ -23,7 +23,7 @@ from .presets import PromptPreset, default_prompt_preset
 
 
 CACHE_SCHEMA_VERSION = 1
-PROMPT_CACHE_VERSION = 2
+PROMPT_CACHE_VERSION = 3
 STRUCTURE_CACHE_VERSION = 1
 
 _HASH_CHUNK_SIZE = 1024 * 1024

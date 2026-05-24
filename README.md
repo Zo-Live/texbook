@@ -174,6 +174,12 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 
 断点续传缓存默认启用。项目模式下，相同 PDF、页码、模型、prompt、图片参数和结构规划参数重跑时会复用结构规划结果，避免大型教材重复规划；正文转换会继续复用已完成 chunk。中途失败后再次运行可从已完成规划或 chunk 继续。缓存目录中会保留 `evidence.json`、`structure-*.json` 等结构规划中间产物，便于检查书签、标题线索、LLM 规划响应和最终结构计划。等待未命中缓存的 LLM 请求时，交互式终端会在 stderr 显示加载提示，stdout 仍只输出 LaTeX，便于重定向。
 
+## 复杂内容处理
+
+默认 prompt 会要求模型把清晰表格转换为可编译的 `tabular` 或 `array`。图片化表格、跨页表格、图片、图表、边栏、多栏和旁注等暂不可靠的复杂内容会降级为 `% TODO:` 注释，并通过 notes 或项目 metadata 记录；当前不会生成图片裁切资源，也不会输出指向不存在文件的 `\includegraphics`。
+
+项目输出的 `metadata["complex_content"]` 只用于调试和后续扩展，不影响 `main.tex`、`preamble.tex` 和章节文件写盘。后续接入视觉定位和裁切流程后，可以复用这些候选信息生成 `figures/` 资源。
+
 ## 项目结构
 
 ```text

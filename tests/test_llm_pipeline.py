@@ -438,6 +438,37 @@ def test_pipeline_can_build_project_output():
     assert all(page.image_base64 is None for chunk in extractor.chunks for page in chunk.pages)
 
 
+def test_project_output_records_complex_content_metadata_from_chunks():
+    pages = [PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1")]
+    extractor = FakeExtractor(pages)
+    client = FakeClient(
+        latex_fragments=[
+            r"""
+            正文
+
+            % TODO: figure pending_asset 第 1 页图像需要裁切
+            \includegraphics{figures/missing.png}
+            """
+        ]
+    )
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=1,
+        structure_options=StructurePlannerOptions(mode=StructureMode.off),
+    )
+
+    project = converter.convert_project(Path("docs/sample.pdf"))
+
+    chapter = project.files[PurePosixPath("chapters/chapter01.tex")]
+    candidates = project.metadata["complex_content"]["candidates"]
+    assert r"\includegraphics" not in chapter
+    assert "% TODO: figure pending_asset" in chapter
+    assert candidates[0]["kind"] == "figure"
+    assert candidates[0]["strategy"] == "pending_asset"
+    assert candidates[0]["page_number"] == 1
+
+
 def test_project_output_uses_valid_bookmark_structure_plan():
     pages = [
         PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),

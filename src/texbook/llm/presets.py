@@ -33,6 +33,9 @@ SYSTEM_PROMPT = """你是中文数学讲义的 LaTeX 整理助手。
 7. 定义、定理、引理、性质、推论、例、证明优先使用 definition、theorem、lemma、property、corollary、example、proof 环境。
 8. 不要凭空补充页面中没有的信息；无法确定的内容用 LaTeX 注释 % TODO: 标出。
 9. 中文标点和数学符号要尽量还原讲义语义，不要保留 OCR 的逐字断行。
+10. 表格如果行列结构清晰，转换为可编译的 tabular 或 array；如果是图片化表格、跨页表格或结构不可靠，输出 % TODO: table ... 注释并在 notes 说明。
+11. 当前不支持图片、图表或 figure 裁切资源输出；不要生成 \\includegraphics 或引用不存在的文件，改用 % TODO: figure pending_asset ... 注释。
+12. 边栏、多栏、旁注等复杂版面按自然阅读顺序整理；无法可靠合并时输出 % TODO: layout ... 注释，不要强行猜测。
 """
 
 TITLE_SYSTEM_PROMPT = """你是中文数学讲义的标题整理助手。

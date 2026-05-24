@@ -2,6 +2,14 @@
 
 from pathlib import PurePosixPath
 
+from texbook.complex_content import (
+    ComplexContentCandidate,
+    ComplexContentKind,
+    ComplexContentSource,
+    ComplexContentStrategy,
+    collect_complex_content_candidates,
+    complex_content_metadata,
+)
 from texbook.convert.latex_converter import LatexConverter
 from texbook.convert.project import (
     LatexProjectBuilder,
@@ -101,6 +109,70 @@ def test_clean_body_fragment_strips_document_wrappers_with_options():
     assert cleaned == r"\section{集合}"
 
 
+def test_clean_body_fragment_replaces_unsupported_graphics_reference():
+    converter = LatexConverter()
+
+    cleaned = converter.clean_body_fragment(
+        r"正文前\includegraphics[width=.8\textwidth]{figures/missing.png}正文后"
+    )
+
+    assert r"\includegraphics" not in cleaned
+    assert "% TODO: figure pending_asset" in cleaned
+    assert "missing.png" in cleaned
+
+
+def test_complex_content_candidate_metadata_roundtrip():
+    candidate = ComplexContentCandidate(
+        kind=ComplexContentKind.figure,
+        strategy=ComplexContentStrategy.pending_asset,
+        page_number=7,
+        bbox=(1, 2, 3, 4),
+        source=ComplexContentSource.llm_note,
+        confidence=1.5,
+        note="  第 7 页图片待裁切\n",
+    )
+
+    metadata = candidate.to_metadata()
+    restored = ComplexContentCandidate.from_metadata(metadata)
+
+    assert metadata == {
+        "kind": "figure",
+        "strategy": "pending_asset",
+        "source": "llm_note",
+        "confidence": 1.0,
+        "page_number": 7,
+        "bbox": [1.0, 2.0, 3.0, 4.0],
+        "note": "第 7 页图片待裁切",
+    }
+    assert restored == candidate
+
+
+def test_collect_complex_content_candidates_from_latex_and_notes():
+    candidates = collect_complex_content_candidates(
+        fragments=[
+            r"""
+            \begin{tabular}{cc}
+            a & b
+            \end{tabular}
+
+            % TODO: figure pending_asset 第 3 页图像需要裁切
+            % TODO: layout 第 4 页多栏顺序需人工复核
+            """
+        ],
+        notes=["第 5 页图片结构不可靠"],
+    )
+    metadata = complex_content_metadata(candidates)
+
+    assert [candidate.kind for candidate in candidates] == [
+        ComplexContentKind.table,
+        ComplexContentKind.figure,
+        ComplexContentKind.layout_note,
+        ComplexContentKind.figure,
+    ]
+    assert metadata["complex_content"]["schema_version"] == 1
+    assert metadata["complex_content"]["candidates"][1]["page_number"] == 3
+
+
 def test_project_builder_builds_main_preamble_and_chapters():
     builder = LatexProjectBuilder()
 
@@ -146,6 +218,34 @@ def test_project_builder_builds_main_preamble_and_chapters():
     assert r"\documentclass" not in chapter
     assert r"\begin{document}" not in chapter
     assert r"\end{document}" not in chapter
+
+
+def test_project_builder_records_complex_content_metadata():
+    builder = LatexProjectBuilder()
+
+    project = builder.build(
+        title="讲义",
+        fragments=[
+            r"""
+            正文
+
+            % TODO: table 第 2 页表格结构不可靠
+            \includegraphics{figures/raw.png}
+            """
+        ],
+        notes=["第 3 页旁注需要人工复核"],
+    )
+
+    chapter = project.files[PurePosixPath("chapters/chapter01.tex")]
+    candidates = project.metadata["complex_content"]["candidates"]
+
+    assert r"\includegraphics" not in chapter
+    assert "% TODO: figure pending_asset" in chapter
+    assert {candidate["kind"] for candidate in candidates} == {
+        "table",
+        "figure",
+        "layout_note",
+    }
 
 
 def test_project_builder_skips_empty_chapters_and_can_show_today_date():

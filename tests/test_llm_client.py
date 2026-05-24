@@ -121,6 +121,22 @@ def test_build_chunk_messages_contains_page_text_and_image():
     assert any(item["type"] == "image_url" for item in content)
 
 
+def test_build_chunk_messages_contains_complex_content_policy():
+    messages = build_chunk_messages(
+        document_title="第六章",
+        pages=[PdfPageContext(page_number=1, width=1, height=1)],
+        chunk_index=1,
+        total_chunks=1,
+    )
+
+    system = messages[0]["content"]
+    assert "tabular" in system
+    assert "% TODO: table" in system
+    assert "% TODO: figure pending_asset" in system
+    assert r"\includegraphics" in system
+    assert "% TODO: layout" in system
+
+
 def test_build_title_messages_contains_fallback_and_evidence():
     messages = build_title_messages(
         fallback_title="6.1 集合与映射",
