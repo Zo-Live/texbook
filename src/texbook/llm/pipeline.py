@@ -11,6 +11,7 @@ from threading import Event, Thread
 from typing import Iterable, Iterator, Protocol, Sequence, TextIO
 
 from ..convert.latex_converter import LatexConverter
+from ..convert.project import LatexProjectBuilder, LatexProjectResult
 from ..extract.base import ImageRenderOptions, PdfDocumentChunk, PdfPageContext
 from ..extract.text_extractor import TextExtractor
 from .cache import ChunkCacheOptions, ChunkCacheRun
@@ -50,6 +51,15 @@ class LLMConversionResult:
     """Complete LLM conversion output."""
 
     latex: str
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _CollectedConversion:
+    """Shared output collected before final LaTeX assembly."""
+
+    title: str
+    fragments: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
 
@@ -110,6 +120,7 @@ class LLMPdfConverter:
         self.show_date = show_date
         self.progress_spinner = _LlmWaitSpinner(progress_stream, progress_interval)
         self.document_builder = LatexConverter()
+        self.project_builder = LatexProjectBuilder()
 
     def convert(
         self,
@@ -117,6 +128,38 @@ class LLMPdfConverter:
         *,
         pages: Sequence[int] | None = None,
     ) -> LLMConversionResult:
+        collected = self._collect_conversion(pdf_path, pages=pages)
+        return LLMConversionResult(
+            latex=self.document_builder.convert_fragments(
+                title=collected.title,
+                fragments=collected.fragments,
+                notes=collected.notes,
+                show_date=self.show_date,
+            ),
+            notes=collected.notes,
+        )
+
+    def convert_project(
+        self,
+        pdf_path: Path,
+        *,
+        pages: Sequence[int] | None = None,
+    ) -> LatexProjectResult:
+        """Convert a PDF into an in-memory directory-style LaTeX project."""
+        collected = self._collect_conversion(pdf_path, pages=pages)
+        return self.project_builder.build(
+            title=collected.title,
+            fragments=collected.fragments,
+            notes=collected.notes,
+            show_date=self.show_date,
+        )
+
+    def _collect_conversion(
+        self,
+        pdf_path: Path,
+        *,
+        pages: Sequence[int] | None = None,
+    ) -> _CollectedConversion:
         fragments: list[str] = []
         notes: list[str] = []
         previous_latex_tail = ""
@@ -205,13 +248,9 @@ class LLMPdfConverter:
             working_title=working_title,
             title_evidence=title_evidence.build(),
         )
-        return LLMConversionResult(
-            latex=self.document_builder.convert_fragments(
-                title=document_title,
-                fragments=fragments,
-                notes=notes,
-                show_date=self.show_date,
-            ),
+        return _CollectedConversion(
+            title=document_title,
+            fragments=fragments,
             notes=notes,
         )
 

@@ -2,7 +2,7 @@
 
 import re
 
-from typing import List
+from typing import List, Sequence
 
 from ..extract.base import ExtractedContent
 
@@ -178,23 +178,18 @@ class LatexConverter:
         self,
         *,
         title: str,
-        fragments: List[str],
-        notes: List[str] | None = None,
+        fragments: Sequence[str],
+        notes: Sequence[str] | None = None,
         show_date: bool = False,
     ) -> str:
         """Build a complete LaTeX document from trusted body fragments."""
         lines = self._document_header(title, show_date=show_date)
-        for note in notes or []:
-            sanitized_note = note.replace("\n", " ").strip()
-            if sanitized_note:
-                lines.append("% LLM note: " + sanitized_note)
-        if notes:
+        note_lines = self.note_comment_lines(notes or [])
+        if note_lines:
+            lines.extend(note_lines)
             lines.append("")
 
-        for fragment in fragments:
-            cleaned = self._clean_body_fragment(fragment)
-            if not cleaned:
-                continue
+        for cleaned in self.clean_body_fragments(fragments):
             lines.append(cleaned)
             lines.append("")
 
@@ -202,11 +197,13 @@ class LatexConverter:
         lines.append("")
         return "\n".join(lines)
 
-    def _document_header(self, title: str, *, show_date: bool = False) -> List[str]:
-        docclass = r"\documentclass[UTF8]{ctexart}" if self.use_ctex else r"\documentclass{article}"
+    def documentclass_line(self) -> str:
+        """Return the configured documentclass line."""
+        return r"\documentclass[UTF8]{ctexart}" if self.use_ctex else r"\documentclass{article}"
+
+    def preamble_lines(self) -> list[str]:
+        """Return package and theorem definitions shared by all output modes."""
         return [
-            "% !TEX program = xelatex",
-            docclass,
             r"\usepackage{amsmath}",
             r"\usepackage{amsthm}",
             r"\usepackage{amssymb}",
@@ -216,9 +213,49 @@ class LatexConverter:
             r"\newtheorem{property}{性质}",
             r"\newtheorem{corollary}{推论}",
             r"\newtheorem{example}{例}",
-            "",
+        ]
+
+    def title_block_lines(self, title: str, *, show_date: bool = False) -> list[str]:
+        """Return title and date lines for a LaTeX document wrapper."""
+        return [
             r"\title{" + self._escape_latex(title) + "}",
             self._date_line(show_date),
+        ]
+
+    def note_comment_lines(self, notes: Sequence[str]) -> list[str]:
+        """Return sanitized LLM notes as LaTeX comments."""
+        lines: list[str] = []
+        for note in notes:
+            sanitized_note = note.replace("\n", " ").strip()
+            if sanitized_note:
+                lines.append("% LLM note: " + sanitized_note)
+        return lines
+
+    def clean_body_fragment(self, fragment: str) -> str:
+        """Strip complete-document wrappers from a trusted body fragment."""
+        text = fragment.strip()
+        text = _DOCUMENTCLASS_RE.sub("", text)
+        text = _USEPACKAGE_RE.sub("", text)
+        text = text.replace(r"\begin{document}", "")
+        text = text.replace(r"\end{document}", "")
+        return text.strip()
+
+    def clean_body_fragments(self, fragments: Sequence[str]) -> list[str]:
+        """Return non-empty cleaned body fragments in input order."""
+        cleaned_fragments: list[str] = []
+        for fragment in fragments:
+            cleaned = self.clean_body_fragment(fragment)
+            if cleaned:
+                cleaned_fragments.append(cleaned)
+        return cleaned_fragments
+
+    def _document_header(self, title: str, *, show_date: bool = False) -> List[str]:
+        return [
+            "% !TEX program = xelatex",
+            self.documentclass_line(),
+            *self.preamble_lines(),
+            "",
+            *self.title_block_lines(title, show_date=show_date),
             "",
             r"\begin{document}",
             r"\maketitle",
@@ -229,12 +266,7 @@ class LatexConverter:
         return r"\date{\today}" if show_date else r"\date{}"
 
     def _clean_body_fragment(self, fragment: str) -> str:
-        text = fragment.strip()
-        text = _DOCUMENTCLASS_RE.sub("", text)
-        text = _USEPACKAGE_RE.sub("", text)
-        text = text.replace(r"\begin{document}", "")
-        text = text.replace(r"\end{document}", "")
-        return text.strip()
+        return self.clean_body_fragment(fragment)
 
     def _escape_latex(self, text: str) -> str:
         text = self._strip_invalid_chars(text)

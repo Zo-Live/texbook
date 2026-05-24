@@ -2,7 +2,7 @@
 
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import threading
 
 import pytest
@@ -320,6 +320,46 @@ def test_pipeline_chunks_pages_and_builds_document():
     assert extractor.calls[0]["image_options"].image_format == "png"
     assert client.calls[0]["pages"] == [1, 2]
     assert client.calls[1]["pages"] == [3]
+    assert client.calls[1]["previous_latex_tail"]
+    assert all(page.image_base64 is None for chunk in extractor.chunks for page in chunk.pages)
+
+
+def test_pipeline_can_build_project_output():
+    pages = [
+        PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),
+        PdfPageContext(page_number=2, width=1, height=1, image_base64="page-2"),
+    ]
+    extractor = FakeExtractor(pages)
+    client = FakeClient(
+        latex_fragments=[
+            r"\documentclass{article}\begin{document}\section{Chunk 1}\end{document}",
+            r"\section{Chunk 2}",
+        ]
+    )
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=1,
+        manual_title=" 项目标题 ",
+        show_date=True,
+    )
+
+    project = converter.convert_project(Path("docs/sample.pdf"))
+
+    assert project.entrypoint == PurePosixPath("main.tex")
+    assert project.notes == ["chunk-1", "chunk-2"]
+    assert set(project.files) == {
+        PurePosixPath("main.tex"),
+        PurePosixPath("preamble.tex"),
+        PurePosixPath("chapters/chapter01.tex"),
+        PurePosixPath("chapters/chapter02.tex"),
+    }
+    assert r"\title{项目标题}" in project.files[PurePosixPath("main.tex")]
+    assert r"\date{\today}" in project.files[PurePosixPath("main.tex")]
+    assert r"\input{chapters/chapter01}" in project.files[PurePosixPath("main.tex")]
+    assert project.files[PurePosixPath("chapters/chapter01.tex")] == "\\section{Chunk 1}\n"
+    assert project.files[PurePosixPath("chapters/chapter02.tex")] == "\\section{Chunk 2}\n"
+    assert client.calls[0]["document_title"] == "项目标题"
     assert client.calls[1]["previous_latex_tail"]
     assert all(page.image_base64 is None for chunk in extractor.chunks for page in chunk.pages)
 
