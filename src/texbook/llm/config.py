@@ -31,17 +31,17 @@ class LLMConfig:
         timeout: float | None = None,
         max_tokens: int = 128000,
     ) -> "LLMConfig":
-        resolved_model = model or os.environ.get("LATEX_TOOLS_LLM_MODEL")
-        resolved_api_key = api_key or os.environ.get("LATEX_TOOLS_LLM_API_KEY")
-        resolved_base_url = base_url or os.environ.get("LATEX_TOOLS_LLM_BASE_URL")
+        resolved_model = model or os.environ.get("TEXBOOK_MODEL")
+        resolved_api_key = api_key or os.environ.get("TEXBOOK_API_KEY")
+        resolved_base_url = base_url or os.environ.get("TEXBOOK_BASE_URL")
 
         if not resolved_model:
             raise LLMConfigError(
-                "Missing model. Set LATEX_TOOLS_LLM_MODEL or pass --model."
+                "Missing model. Set TEXBOOK_MODEL or pass --model."
             )
         if not resolved_api_key:
             raise LLMConfigError(
-                "Missing API key. Set LATEX_TOOLS_LLM_API_KEY or pass --api-key."
+                "Missing API key. Set TEXBOOK_API_KEY or pass --api-key."
             )
         if temperature < 0:
             raise LLMConfigError("Temperature must be non-negative.")

@@ -1,9 +1,9 @@
 use Cwd qw(abs_path getcwd);
 
 my $cwd = abs_path(getcwd());
-my $repo_root = (-d "$cwd/src" && -d "$cwd/src/latex_tools")
+my $repo_root = (-d "$cwd/src" && -d "$cwd/src/texbook")
     ? $cwd
-    : (-d "$cwd/../src" && -d "$cwd/../src/latex_tools")
+    : (-d "$cwd/../src" && -d "$cwd/../src/texbook")
         ? abs_path("$cwd/..")
         : $cwd;
 my $post_build = "$repo_root/scripts/post-build.sh";

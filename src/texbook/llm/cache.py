@@ -26,7 +26,7 @@ class ChunkCacheOptions:
     """Runtime options for chunk result caching."""
 
     enabled: bool = True
-    cache_dir: Path = Path("build/.latex_tools_cache")
+    cache_dir: Path = Path("build/.texbook_cache")
     clear: bool = False
     llm_model: str = ""
     llm_base_url: str | None = None

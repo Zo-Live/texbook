@@ -3,16 +3,16 @@
 import sys
 from types import SimpleNamespace
 
-from latex_tools.extract.base import PageTextBlock, PdfPageContext
-from latex_tools.llm.client import (
+from texbook.extract.base import PageTextBlock, PdfPageContext
+from texbook.llm.client import (
     LLMResponseError,
     OpenAICompatibleClient,
     parse_chunk_response,
     parse_title_response,
 )
-from latex_tools.llm.config import LLMConfig
-from latex_tools.llm.prompts import build_chunk_messages, build_title_messages
-from latex_tools.llm.presets import PromptPreset, default_prompt_preset
+from texbook.llm.config import LLMConfig
+from texbook.llm.prompts import build_chunk_messages, build_title_messages
+from texbook.llm.presets import PromptPreset, default_prompt_preset
 
 
 def test_parse_chunk_response_accepts_fenced_json():

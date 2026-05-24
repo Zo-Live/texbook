@@ -1,10 +1,11 @@
 [project]
-name = "latex-tools"
+name = "texbook"
 version = "0.1.0"
 description = "PDF extraction and LaTeX conversion for Chinese math lecture notes"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "click>=8.0.0",
     "httpx>=0.27.0",
     "openai>=1.0.0",
     "pymupdf>=1.25.0",
@@ -12,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-latex-tools = "latex_tools.cli:app"
+texbook = "texbook.cli:app"
 
 [dependency-groups]
 dev = [
@@ -25,4 +26,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/latex_tools"]
+packages = ["src/texbook"]

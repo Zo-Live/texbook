@@ -6,10 +6,10 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from latex_tools import cli as cli_module
-from latex_tools.cli import TitleSource, _build_converter, _parse_pages, app
-from latex_tools.extract.base import DocumentExtractionError
-from latex_tools.llm.presets import PromptPreset, default_prompt_preset
+from texbook import cli as cli_module
+from texbook.cli import TitleSource, _build_converter, _parse_pages, app
+from texbook.extract.base import DocumentExtractionError
+from texbook.llm.presets import PromptPreset, default_prompt_preset
 
 
 class DummyClient:

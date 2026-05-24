@@ -1,6 +1,6 @@
 """Tests for LaTeX document assembly."""
 
-from latex_tools.convert.latex_converter import LatexConverter
+from texbook.convert.latex_converter import LatexConverter
 
 
 def test_convert_fragments_strips_document_wrappers():

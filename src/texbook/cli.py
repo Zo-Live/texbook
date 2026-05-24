@@ -1,4 +1,4 @@
-"""CLI entry point for latex-tools."""
+"""CLI entry point for texbook."""
 
 import json
 from enum import Enum
@@ -35,7 +35,7 @@ def _repo_root() -> Path:
     cwd = Path.cwd().resolve()
     for candidate in (cwd, *cwd.parents):
         if (candidate / "pyproject.toml").is_file() and (
-            candidate / "src" / "latex_tools"
+            candidate / "src" / "texbook"
         ).is_dir():
             return candidate
     return cwd
@@ -69,7 +69,7 @@ def _resolve_output_dir(path: Path) -> Path:
 
 
 app = typer.Typer(
-    name="latex-tools",
+    name="texbook",
     help="Convert PDFs to LaTeX source using an LLM-assisted pipeline.",
 )
 presets_app = typer.Typer(help="Manage prompt presets.")
@@ -125,7 +125,7 @@ def _build_converter(
     image_format: str = "png",
     jpeg_quality: int = 85,
     prefetch_chunks: int = 1,
-    cache_dir: Path = Path("build/.latex_tools_cache"),
+    cache_dir: Path = Path("build/.texbook_cache"),
     no_cache: bool = False,
     clear_cache: bool = False,
     extra_prompt: Optional[str] = None,
@@ -372,20 +372,20 @@ def extract(
     model: Optional[str] = typer.Option(
         None,
         "--model",
-        envvar="LATEX_TOOLS_LLM_MODEL",
+        envvar="TEXBOOK_MODEL",
         help="LLM model name",
     ),
     api_key: Optional[str] = typer.Option(
         None,
         "--api-key",
-        envvar="LATEX_TOOLS_LLM_API_KEY",
+        envvar="TEXBOOK_API_KEY",
         help="LLM API key",
         hide_input=True,
     ),
     base_url: Optional[str] = typer.Option(
         None,
         "--base-url",
-        envvar="LATEX_TOOLS_LLM_BASE_URL",
+        envvar="TEXBOOK_BASE_URL",
         help="OpenAI-compatible API base URL",
     ),
     temperature: float = typer.Option(
@@ -423,7 +423,7 @@ def extract(
         1, "--prefetch-chunks", help="Number of future chunks to pre-render"
     ),
     cache_dir: Path = typer.Option(
-        Path("build/.latex_tools_cache"),
+        Path("build/.texbook_cache"),
         "--cache-dir",
         help="Directory for resumable chunk cache",
     ),
@@ -523,20 +523,20 @@ def batch(
     model: Optional[str] = typer.Option(
         None,
         "--model",
-        envvar="LATEX_TOOLS_LLM_MODEL",
+        envvar="TEXBOOK_MODEL",
         help="LLM model name",
     ),
     api_key: Optional[str] = typer.Option(
         None,
         "--api-key",
-        envvar="LATEX_TOOLS_LLM_API_KEY",
+        envvar="TEXBOOK_API_KEY",
         help="LLM API key",
         hide_input=True,
     ),
     base_url: Optional[str] = typer.Option(
         None,
         "--base-url",
-        envvar="LATEX_TOOLS_LLM_BASE_URL",
+        envvar="TEXBOOK_BASE_URL",
         help="OpenAI-compatible API base URL",
     ),
     temperature: float = typer.Option(
@@ -574,7 +574,7 @@ def batch(
         1, "--prefetch-chunks", help="Number of future chunks to pre-render"
     ),
     cache_dir: Path = typer.Option(
-        Path("build/.latex_tools_cache"),
+        Path("build/.texbook_cache"),
         "--cache-dir",
         help="Directory for resumable chunk cache",
     ),

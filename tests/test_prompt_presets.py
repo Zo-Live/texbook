@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from latex_tools.llm.presets import (
+from texbook.llm.presets import (
     DEFAULT_PROMPT_PRESET_NAME,
     PromptPreset,
     PromptPresetError,
@@ -47,7 +47,7 @@ def test_saves_loads_and_lists_repository_prompt_preset(tmp_path):
     loaded = load_prompt_preset("custom-one", repo_root=tmp_path)
     listed = list_prompt_presets(repo_root=tmp_path)
 
-    assert path == tmp_path / "config/latex_tools/presets/custom-one.json"
+    assert path == tmp_path / "config/texbook/presets/custom-one.json"
     assert loaded == preset
     assert [item.preset.name for item in listed] == [
         DEFAULT_PROMPT_PRESET_NAME,
@@ -83,7 +83,7 @@ def test_rejects_invalid_names_and_builtin_overwrite(tmp_path):
 
 def test_repository_prompt_preset_file_name_must_match_name(tmp_path):
     preset = _preset()
-    path = tmp_path / "config/latex_tools/presets/wrong-name.json"
+    path = tmp_path / "config/texbook/presets/wrong-name.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(preset.to_dict(), ensure_ascii=False), encoding="utf-8")
 

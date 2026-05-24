@@ -13,7 +13,7 @@ from typing import Any
 
 PROMPT_PRESET_SCHEMA_VERSION = 1
 DEFAULT_PROMPT_PRESET_NAME = "chinese-math"
-REPOSITORY_PRESET_DIR = Path("config/latex_tools/presets")
+REPOSITORY_PRESET_DIR = Path("config/texbook/presets")
 
 _PRESET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 _HASH_SEPARATORS = (",", ":")

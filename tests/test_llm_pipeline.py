@@ -7,21 +7,21 @@ import threading
 
 import pytest
 
-from latex_tools.extract.base import (
+from texbook.extract.base import (
     ImageRenderOptions,
     PageTextBlock,
     PdfDocumentChunk,
     PdfPageContext,
 )
-from latex_tools.llm.cache import ChunkCacheOptions, ChunkCacheRun
-from latex_tools.llm.pipeline import (
+from texbook.llm.cache import ChunkCacheOptions, ChunkCacheRun
+from texbook.llm.pipeline import (
     LLMPdfConverter,
     _LlmWaitSpinner,
     _append_tail,
     _iter_prefetched_chunks,
     _tail,
 )
-from latex_tools.llm.presets import PromptPreset, default_prompt_preset
+from texbook.llm.presets import PromptPreset, default_prompt_preset
 
 
 class FakeExtractor:

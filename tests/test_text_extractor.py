@@ -6,12 +6,12 @@ import base64
 import pymupdf
 import pytest
 
-from latex_tools.extract.base import (
+from texbook.extract.base import (
     DocumentExtractionError,
     ImageRenderOptions,
     PageTextBlock,
 )
-from latex_tools.extract.text_extractor import TextExtractor
+from texbook.extract.text_extractor import TextExtractor
 
 
 def _write_blank_pdf(path: Path, page_count: int) -> None:

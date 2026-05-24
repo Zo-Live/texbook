@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Move LaTeX build outputs to their local directories after compilation.
+# Move local LaTeX build outputs from src/ back to out/ and build/.
 
 set -euo pipefail
 
