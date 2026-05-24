@@ -3,7 +3,17 @@
 from pathlib import PurePosixPath
 
 from texbook.convert.latex_converter import LatexConverter
-from texbook.convert.project import LatexProjectBuilder, LatexProjectResult
+from texbook.convert.project import (
+    LatexProjectBuilder,
+    LatexProjectResult,
+    LatexProjectSection,
+)
+from texbook.structure import (
+    StructureItemKind,
+    StructurePlan,
+    StructurePlanItem,
+    StructurePlanSource,
+)
 
 
 def test_convert_fragments_strips_document_wrappers():
@@ -157,6 +167,74 @@ def test_project_builder_skips_empty_chapters_and_can_show_today_date():
     }
     assert r"\date{\today}" in project.files[PurePosixPath("main.tex")]
     assert project.files[PurePosixPath("chapters/chapter01.tex")] == "\\section{非空}\n"
+
+
+def test_project_builder_builds_semantic_plan_files_with_appendix():
+    builder = LatexProjectBuilder()
+    plan = StructurePlan(
+        source=StructurePlanSource.llm_toc,
+        confidence=0.8,
+        items=[
+            StructurePlanItem(
+                kind=StructureItemKind.frontmatter,
+                title="前言",
+                start_page=1,
+                end_page=1,
+                confidence=0.8,
+                source=StructurePlanSource.llm_toc,
+            ),
+            StructurePlanItem(
+                kind=StructureItemKind.chapter,
+                title="第一章 集合",
+                start_page=2,
+                end_page=5,
+                confidence=0.8,
+                source=StructurePlanSource.llm_toc,
+            ),
+            StructurePlanItem(
+                kind=StructureItemKind.appendix,
+                title="附录 A",
+                start_page=6,
+                end_page=7,
+                confidence=0.8,
+                source=StructurePlanSource.llm_toc,
+            ),
+        ],
+    )
+
+    project = builder.build_from_plan(
+        title="教材",
+        structure_plan=plan,
+        sections=[
+            LatexProjectSection(item=plan.items[0], fragments=["前置说明"]),
+            LatexProjectSection(
+                item=plan.items[1],
+                fragments=[r"\section{第一章 集合}" + "\n正文"],
+            ),
+            LatexProjectSection(item=plan.items[2], fragments=["附录正文"]),
+        ],
+        notes=["plan note"],
+    )
+
+    assert set(project.files) == {
+        PurePosixPath("main.tex"),
+        PurePosixPath("preamble.tex"),
+        PurePosixPath("chapters/frontmatter.tex"),
+        PurePosixPath("chapters/chapter01.tex"),
+        PurePosixPath("appendices/appendix01.tex"),
+    }
+    main = project.files[PurePosixPath("main.tex")]
+    assert r"\input{chapters/frontmatter}" in main
+    assert r"\input{chapters/chapter01}" in main
+    assert r"\appendix" in main
+    assert r"\input{appendices/appendix01}" in main
+    assert project.files[PurePosixPath("chapters/frontmatter.tex")].startswith(
+        r"\section*{前言}"
+    )
+    assert project.files[PurePosixPath("chapters/chapter01.tex")].count(
+        r"\section{第一章 集合}"
+    ) == 1
+    assert project.metadata["structure_plan"]["source"] == "llm-toc"
 
 
 def test_project_result_rejects_missing_entrypoint():

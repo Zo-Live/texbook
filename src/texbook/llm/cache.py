@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ..extract.base import ImageRenderOptions, PdfDocumentChunk
+from ..structure import StructurePlan, plan_hash_payload
 from .client import LLMChunkResult
 from .presets import PromptPreset, default_prompt_preset
 
@@ -53,11 +54,13 @@ class ChunkCacheRun:
         extra_prompt: str,
         prompt_preset: PromptPreset | None = None,
         title_source: str = "filename",
+        structure_plan: StructurePlan | None = None,
     ):
         self.options = options
         self.document_title = document_title
         self.prompt_preset = prompt_preset or default_prompt_preset()
         self.title_source = title_source
+        self.structure_plan = structure_plan
         self.run_key = _run_key(
             options=options,
             pdf_path=pdf_path,
@@ -69,6 +72,7 @@ class ChunkCacheRun:
             extra_prompt=extra_prompt,
             prompt_preset=self.prompt_preset,
             title_source=title_source,
+            structure_plan=structure_plan,
         )
         self.run_dir = options.cache_dir / self.run_key
         if options.clear:
@@ -128,6 +132,7 @@ class ChunkCacheRun:
             "run_key": self.run_key,
             "document_title": self.document_title,
             "title_source": self.title_source,
+            "structure_plan": plan_hash_payload(self.structure_plan),
             "prompt_preset_name": self.prompt_preset.name,
             "prompt_preset_version": self.prompt_preset.version,
             "prompt_preset_hash": self.prompt_preset.prompt_hash(),
@@ -183,6 +188,7 @@ class ChunkCacheRun:
             and data.get("run_key") == self.run_key
             and data.get("document_title") == self.document_title
             and data.get("title_source") == self.title_source
+            and data.get("structure_plan") == plan_hash_payload(self.structure_plan)
             and data.get("prompt_preset_name") == self.prompt_preset.name
             and data.get("prompt_preset_version") == self.prompt_preset.version
             and data.get("prompt_preset_hash") == self.prompt_preset.prompt_hash()
@@ -206,6 +212,7 @@ def _run_key(
     extra_prompt: str,
     prompt_preset: PromptPreset | None = None,
     title_source: str = "filename",
+    structure_plan: StructurePlan | None = None,
 ) -> str:
     resolved_prompt_preset = prompt_preset or default_prompt_preset()
     payload = {
@@ -214,6 +221,7 @@ def _run_key(
         "pdf_sha256": _sha256_file(pdf_path),
         "document_title": document_title,
         "title_source": title_source,
+        "structure_plan": plan_hash_payload(structure_plan),
         "pages": _normalize_pages(pages),
         "chunk_pages": chunk_pages,
         "image_dpi": image_dpi,

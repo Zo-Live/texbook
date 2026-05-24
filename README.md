@@ -74,6 +74,12 @@ uv run texbook extract "input/lecture.pdf" --project -o "lecture-project"
 uv run texbook extract "input/lecture.pdf" --project -o "lecture-project" --force
 ```
 
+项目模式默认启用大型教材结构规划（`--structure auto`）：如果 PDF 有有效书签，直接按书签生成章级文件；书签缺失或只有页码等无效内容时，会让 LLM 先读取开头少量页面判断是否包含目录，必要时继续读取下一段；仍无法确认目录时，再根据全书标题字号和页面开头文本推断章级结构。自动规划失败会回退到按 LLM chunk 生成章节文件，并在 notes 中提示。需要完全保留旧的 chunk-based 项目输出时，使用：
+
+```bash
+uv run texbook extract "input/lecture.pdf" --project --structure off -o "lecture-project"
+```
+
 只转换部分页面：
 
 ```bash
@@ -158,6 +164,9 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 - `--max-tokens`：LLM 响应最大 token 数，默认 `128000`。
 - `--temperature`：LLM 采样温度，默认 `1.0`；`extract` 和 `batch` 都支持。
 - `--project`：输出目录化 LaTeX 项目；`extract` 需要同时指定 `-o <dir>`，`batch` 会为每个 PDF 创建独立项目目录。
+- `--structure`：项目结构规划模式，支持 `auto`、`off`、`local`、`llm`，默认 `auto`，仅项目模式生效。
+- `--structure-chunk-pages`：结构规划阶段每次发送给 LLM 的开头页数，默认 `8`。
+- `--structure-max-pages`：结构规划阶段最多用页面图像检查的开头页数，默认 `32`。
 - `--force`：仅与 `--project` 一起使用，清空目标项目目录后重新写入。
 - `--cache-dir`：断点续传缓存目录，默认 `build/.texbook_cache/`。
 - `--no-cache`：禁用 chunk 缓存。

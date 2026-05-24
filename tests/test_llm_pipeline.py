@@ -13,6 +13,13 @@ from texbook.extract.base import (
     PdfDocumentChunk,
     PdfPageContext,
 )
+from texbook.structure import (
+    BookmarkEntry,
+    StructureEvidence,
+    StructureMode,
+    StructurePlannerOptions,
+)
+from texbook.llm.client import LLMStructurePlanResult
 from texbook.llm.cache import ChunkCacheOptions, ChunkCacheRun
 from texbook.llm.pipeline import (
     LLMPdfConverter,
@@ -25,10 +32,12 @@ from texbook.llm.presets import PromptPreset, default_prompt_preset
 
 
 class FakeExtractor:
-    def __init__(self, pages):
+    def __init__(self, pages, *, bookmarks=None):
         self.pages = pages
+        self.bookmarks = bookmarks or []
         self.calls = []
         self.chunks = []
+        self.structure_calls = []
 
     def extract_context(self, pdf_path, pages=None, image_dpi=160, include_images=True):
         raise AssertionError("LLMPdfConverter should use iter_context_chunks.")
@@ -72,6 +81,27 @@ class FakeExtractor:
             self.chunks.append(chunk)
             yield chunk
 
+    def extract_structure_evidence(self, pdf_path, *, pages=None):
+        self.structure_calls.append({"pdf_path": pdf_path, "pages": pages})
+        wanted_pages = set(pages) if pages is not None else None
+        selected_pages = [
+            page.page_number
+            for page in self.pages
+            if wanted_pages is None or page.page_number in wanted_pages
+        ]
+        return StructureEvidence(
+            source_title=pdf_path.stem,
+            total_pages=len(self.pages),
+            selected_pages=selected_pages,
+            bookmarks=list(self.bookmarks),
+            heading_candidates=[],
+            page_starts={
+                page.page_number: page.plain_text[:300]
+                for page in self.pages
+                if wanted_pages is None or page.page_number in wanted_pages
+            },
+        )
+
 
 class FakeClient:
     def __init__(
@@ -83,6 +113,7 @@ class FakeClient:
     ):
         self.calls = []
         self.title_calls = []
+        self.structure_calls = []
         self.latex_fragments = latex_fragments
         self.title_response = title_response
         self.title_exception = title_exception
@@ -142,6 +173,45 @@ class FakeClient:
         if self.title_exception is not None:
             raise self.title_exception
         return self.title_response
+
+    def generate_structure_plan(
+        self,
+        *,
+        document_title,
+        evidence,
+        pages=(),
+        inspected_pages=(),
+        stage="toc",
+        extra_prompt="",
+    ):
+        self.structure_calls.append(
+            {
+                "document_title": document_title,
+                "pages": [page.page_number for page in pages],
+                "inspected_pages": list(inspected_pages),
+                "stage": stage,
+                "extra_prompt": extra_prompt,
+            }
+        )
+        if stage == "toc":
+            return LLMStructurePlanResult(
+                status="insufficient",
+                confidence=0.0,
+                reason="no toc",
+            )
+        return LLMStructurePlanResult(
+            status="complete",
+            confidence=0.8,
+            plan=[
+                {
+                    "kind": "chapter",
+                    "title": "第一章",
+                    "start_page": 1,
+                    "end_page": max(evidence.effective_pages),
+                    "confidence": 0.8,
+                }
+            ],
+        )
 
 
 class RaisingClient:
@@ -342,6 +412,7 @@ def test_pipeline_can_build_project_output():
         chunk_pages=1,
         manual_title=" 项目标题 ",
         show_date=True,
+        structure_options=StructurePlannerOptions(mode=StructureMode.off),
     )
 
     project = converter.convert_project(Path("docs/sample.pdf"))
@@ -362,6 +433,182 @@ def test_pipeline_can_build_project_output():
     assert client.calls[0]["document_title"] == "项目标题"
     assert client.calls[1]["previous_latex_tail"]
     assert all(page.image_base64 is None for chunk in extractor.chunks for page in chunk.pages)
+
+
+def test_project_output_uses_valid_bookmark_structure_plan():
+    pages = [
+        PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),
+        PdfPageContext(page_number=2, width=1, height=1, image_base64="page-2"),
+        PdfPageContext(page_number=3, width=1, height=1, image_base64="page-3"),
+        PdfPageContext(page_number=4, width=1, height=1, image_base64="page-4"),
+    ]
+    extractor = FakeExtractor(
+        pages,
+        bookmarks=[
+            BookmarkEntry(level=1, title="第一章 集合", page_number=1),
+            BookmarkEntry(level=1, title="第二章 映射", page_number=3),
+        ],
+    )
+    client = FakeClient(
+        latex_fragments=[
+            r"\section{第一章 集合}\n第一页",
+            "第三页",
+        ]
+    )
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=2,
+    )
+
+    project = converter.convert_project(Path("docs/sample.pdf"))
+
+    assert client.structure_calls == []
+    assert [call["pages"] for call in client.calls] == [[1, 2], [3, 4]]
+    assert set(project.files) == {
+        PurePosixPath("main.tex"),
+        PurePosixPath("preamble.tex"),
+        PurePosixPath("chapters/chapter01.tex"),
+        PurePosixPath("chapters/chapter02.tex"),
+    }
+    assert project.metadata["structure_plan"]["source"] == "bookmark"
+    assert r"\input{chapters/chapter01}" in project.files[PurePosixPath("main.tex")]
+    assert project.files[PurePosixPath("chapters/chapter01.tex")].startswith(
+        r"\section{第一章 集合}"
+    )
+    assert project.files[PurePosixPath("chapters/chapter02.tex")].startswith(
+        r"\section{第二章 映射}"
+    )
+
+
+def test_project_output_continues_llm_structure_planning_when_more_pages_needed():
+    pages = [
+        PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),
+        PdfPageContext(page_number=2, width=1, height=1, image_base64="page-2"),
+        PdfPageContext(page_number=3, width=1, height=1, image_base64="page-3"),
+        PdfPageContext(page_number=4, width=1, height=1, image_base64="page-4"),
+    ]
+    extractor = FakeExtractor(pages)
+
+    class PlanningClient(FakeClient):
+        def generate_structure_plan(self, **kwargs):
+            self.structure_calls.append(
+                {
+                    "pages": [page.page_number for page in kwargs["pages"]],
+                    "inspected_pages": list(kwargs["inspected_pages"]),
+                    "stage": kwargs["stage"],
+                }
+            )
+            if len(self.structure_calls) == 1:
+                return LLMStructurePlanResult(
+                    status="need_more",
+                    reason="目录还没结束",
+                    needed_pages=[3, 4],
+                )
+            return LLMStructurePlanResult(
+                status="complete",
+                confidence=0.84,
+                reason="目录完整",
+                plan=[
+                    {
+                        "kind": "chapter",
+                        "title": "第一章",
+                        "start_page": 1,
+                        "end_page": 2,
+                        "confidence": 0.8,
+                    },
+                    {
+                        "kind": "chapter",
+                        "title": "第二章",
+                        "start_page": 3,
+                        "end_page": 4,
+                        "confidence": 0.8,
+                    },
+                ],
+            )
+
+    client = PlanningClient(latex_fragments=["body-1", "body-2"])
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=2,
+        structure_options=StructurePlannerOptions(
+            mode=StructureMode.auto,
+            chunk_pages=2,
+            max_pages=4,
+        ),
+    )
+
+    project = converter.convert_project(Path("docs/sample.pdf"))
+
+    assert client.structure_calls == [
+        {"pages": [1, 2], "inspected_pages": [1, 2], "stage": "toc"},
+        {"pages": [3, 4], "inspected_pages": [1, 2, 3, 4], "stage": "toc"},
+    ]
+    assert [call["pages"] for call in client.calls] == [[1, 2], [3, 4]]
+    assert project.metadata["structure_plan"]["source"] == "llm-toc"
+
+
+def test_project_output_falls_back_to_chunk_files_when_auto_planning_fails():
+    pages = [
+        PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),
+        PdfPageContext(page_number=2, width=1, height=1, image_base64="page-2"),
+        PdfPageContext(page_number=3, width=1, height=1, image_base64="page-3"),
+    ]
+    extractor = FakeExtractor(pages)
+
+    class InsufficientClient(FakeClient):
+        def generate_structure_plan(self, **kwargs):
+            self.structure_calls.append({"stage": kwargs["stage"]})
+            return LLMStructurePlanResult(
+                status="insufficient",
+                reason="没有结构线索",
+            )
+
+    client = InsufficientClient(latex_fragments=["chunk-1", "chunk-2"])
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=2,
+        structure_options=StructurePlannerOptions(mode=StructureMode.auto),
+    )
+
+    project = converter.convert_project(Path("docs/sample.pdf"))
+
+    assert "structure_plan" not in project.metadata
+    assert set(project.files) == {
+        PurePosixPath("main.tex"),
+        PurePosixPath("preamble.tex"),
+        PurePosixPath("chapters/chapter01.tex"),
+        PurePosixPath("chapters/chapter02.tex"),
+    }
+    assert any("回退" in note for note in project.notes)
+
+
+def test_project_structure_respects_non_contiguous_page_selection():
+    pages = [
+        PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),
+        PdfPageContext(page_number=2, width=1, height=1, image_base64="page-2"),
+        PdfPageContext(page_number=3, width=1, height=1, image_base64="page-3"),
+        PdfPageContext(page_number=4, width=1, height=1, image_base64="page-4"),
+    ]
+    extractor = FakeExtractor(
+        pages,
+        bookmarks=[
+            BookmarkEntry(level=1, title="第一章", page_number=1),
+            BookmarkEntry(level=1, title="第二章", page_number=3),
+        ],
+    )
+    client = FakeClient(latex_fragments=["page-1", "page-3"])
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=2,
+    )
+
+    converter.convert_project(Path("docs/sample.pdf"), pages=[1, 3])
+
+    assert [call["pages"] for call in client.calls] == [[1], [3]]
 
 
 def test_pipeline_uses_manual_title_for_prompt_and_document():

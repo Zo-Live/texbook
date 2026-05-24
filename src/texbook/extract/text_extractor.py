@@ -20,6 +20,7 @@ from .base import (
     PdfDocumentContext,
     PdfPageContext,
 )
+from ..structure import BookmarkEntry, PageHeadingCandidate, StructureEvidence
 
 
 _PYMUPDF_OPEN_ERRORS = tuple(
@@ -153,6 +154,50 @@ class TextExtractor(BaseExtractor):
                     total_chunks=total_chunks,
                     pages=chunk_pages,
                 )
+        finally:
+            doc.close()
+
+    def extract_structure_evidence(
+        self,
+        pdf_path: Path,
+        *,
+        pages: Optional[Sequence[int]] = None,
+    ) -> StructureEvidence:
+        """Extract text-only structure evidence for planning."""
+        doc = self._open_document(pdf_path)
+        try:
+            page_count = self._page_count(doc, pdf_path)
+            page_numbers = self._selected_page_numbers(page_count, pages)
+            selected_set = set(page_numbers)
+            bookmarks = self._read_bookmarks(doc, selected_set=selected_set)
+            heading_candidates: list[PageHeadingCandidate] = []
+            page_starts: dict[int, str] = {}
+
+            for page_number in page_numbers:
+                page = self._load_page(doc, pdf_path, page_number)
+                blocks = self._read_page_text_blocks(
+                    page,
+                    pdf_path=pdf_path,
+                    page_number=page_number,
+                )
+                page_text = " ".join(block.text for block in blocks if block.text)
+                if page_text:
+                    page_starts[page_number] = page_text[:300]
+                heading_candidates.extend(
+                    self._heading_candidates_from_blocks(
+                        blocks,
+                        page_number=page_number,
+                    )
+                )
+
+            return StructureEvidence(
+                source_title=pdf_path.stem,
+                total_pages=page_count,
+                selected_pages=page_numbers,
+                bookmarks=bookmarks,
+                heading_candidates=heading_candidates,
+                page_starts=page_starts,
+            )
         finally:
             doc.close()
 
@@ -347,6 +392,69 @@ class TextExtractor(BaseExtractor):
                 )
 
         return blocks
+
+    def _read_bookmarks(
+        self,
+        doc: pymupdf.Document,
+        *,
+        selected_set: set[int],
+    ) -> list[BookmarkEntry]:
+        try:
+            raw_toc = doc.get_toc(simple=True)
+        except (OSError, RuntimeError, ValueError):
+            return []
+
+        bookmarks: list[BookmarkEntry] = []
+        for item in raw_toc:
+            if len(item) < 3:
+                continue
+            try:
+                level = int(item[0])
+                title = self._clean_text(str(item[1]))
+                page_number = int(item[2])
+            except (TypeError, ValueError):
+                continue
+            if page_number <= 0 or page_number not in selected_set:
+                continue
+            title = " ".join(title.split())
+            if not title:
+                continue
+            bookmarks.append(
+                BookmarkEntry(
+                    level=level,
+                    title=title,
+                    page_number=page_number,
+                )
+            )
+        return bookmarks
+
+    def _heading_candidates_from_blocks(
+        self,
+        blocks: Sequence[PageTextBlock],
+        *,
+        page_number: int,
+    ) -> list[PageHeadingCandidate]:
+        if not blocks:
+            return []
+        font_sizes = sorted({block.font_size for block in blocks}, reverse=True)
+        high_size_threshold = font_sizes[min(2, len(font_sizes) - 1)] if font_sizes else 14
+        candidates: list[PageHeadingCandidate] = []
+        seen: set[str] = set()
+        for block in blocks:
+            text = " ".join(block.text.split())
+            if not text or len(text) > 120 or text in seen:
+                continue
+            if block.block_type == "heading" or block.font_size >= high_size_threshold:
+                candidates.append(
+                    PageHeadingCandidate(
+                        page_number=page_number,
+                        text=text,
+                        font_size=block.font_size,
+                        block_type=block.block_type,
+                    )
+                )
+                seen.add(text)
+        return candidates
 
     def _join_spans(self, spans: Iterable[dict]) -> str:
         parts = [self._clean_text(span.get("text", "")) for span in spans]

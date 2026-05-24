@@ -8,8 +8,13 @@ from typing import Any, Mapping, Sequence
 import httpx
 
 from ..extract.base import PdfPageContext
+from ..structure import StructureEvidence
 from .config import LLMConfig
-from .prompts import build_chunk_messages, build_title_messages
+from .prompts import (
+    build_chunk_messages,
+    build_structure_messages,
+    build_title_messages,
+)
 from .presets import PromptPreset
 
 
@@ -22,6 +27,18 @@ class LLMChunkResult:
     """Parsed result for one converted PDF chunk."""
 
     latex: str
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LLMStructurePlanResult:
+    """Parsed result for one structure-planning request."""
+
+    status: str
+    plan: list[dict[str, object]] = field(default_factory=list)
+    confidence: float = 0.0
+    reason: str = ""
+    needed_pages: list[int] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
 
@@ -138,6 +155,52 @@ class OpenAICompatibleClient:
             raise LLMResponseError("LLM title response content is empty or not text.")
         return parse_title_response(content)
 
+    def generate_structure_plan(
+        self,
+        *,
+        document_title: str,
+        evidence: StructureEvidence,
+        pages: Sequence[PdfPageContext] = (),
+        inspected_pages: Sequence[int] = (),
+        stage: str = "toc",
+        extra_prompt: str = "",
+    ) -> LLMStructurePlanResult:
+        """Generate a chapter-level structure plan or planning status."""
+        messages = build_structure_messages(
+            document_title=document_title,
+            evidence=evidence,
+            pages=pages,
+            inspected_pages=inspected_pages,
+            stage=stage,
+            extra_prompt=extra_prompt,
+        )
+        request_kwargs = {
+            "model": self.config.model,
+            "messages": messages,
+            "temperature": self.config.temperature,
+            "max_tokens": min(self.config.max_tokens, 8192),
+        }
+        try:
+            response = self._create_completion(request_kwargs, response_format=True)
+        except Exception as exc:  # pragma: no cover - backend specific fallback
+            if _is_temperature_one_error(exc):
+                request_kwargs["temperature"] = 1.0
+                response = self._create_completion(
+                    request_kwargs,
+                    response_format=True,
+                )
+            elif "response_format" not in str(exc):
+                raise
+            else:
+                response = self._create_completion(
+                    request_kwargs,
+                    response_format=False,
+                )
+        content = response.choices[0].message.content
+        if not isinstance(content, str):
+            raise LLMResponseError("LLM structure response content is empty or not text.")
+        return parse_structure_plan_response(content)
+
     def _create_completion(self, request_kwargs: dict[str, Any], *, response_format: bool):
         if response_format:
             return self._client.chat.completions.create(
@@ -176,6 +239,64 @@ def parse_title_response(raw_content: str) -> str:
     if not normalized:
         raise LLMResponseError("LLM response JSON must contain a non-empty title field.")
     return normalized
+
+
+def parse_structure_plan_response(raw_content: str) -> LLMStructurePlanResult:
+    """Parse the expected JSON object from an LLM structure-planning response."""
+    data = _load_json_object(_strip_code_fence(raw_content))
+    status = str(data.get("status", "")).strip().lower()
+    if status not in {"complete", "need_more", "insufficient"}:
+        raise LLMResponseError(
+            "LLM structure JSON must contain status complete, need_more, or insufficient."
+        )
+
+    plan_value = data.get("plan", [])
+    if plan_value is None:
+        plan: list[dict[str, object]] = []
+    elif isinstance(plan_value, list):
+        plan = [
+            dict(item)
+            for item in plan_value
+            if isinstance(item, Mapping)
+        ]
+    else:
+        raise LLMResponseError("LLM structure JSON plan must be a list.")
+
+    needed_value = data.get("needed_pages", [])
+    needed_pages: list[int] = []
+    if isinstance(needed_value, list):
+        for value in needed_value:
+            if isinstance(value, bool):
+                continue
+            try:
+                page = int(value)
+            except (TypeError, ValueError):
+                continue
+            if page > 0:
+                needed_pages.append(page)
+
+    notes_value = data.get("notes", [])
+    if notes_value is None:
+        notes = []
+    elif isinstance(notes_value, list):
+        notes = [str(note) for note in notes_value if str(note).strip()]
+    else:
+        notes = [str(notes_value)]
+
+    confidence_value = data.get("confidence", 0.0)
+    try:
+        confidence = float(confidence_value)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    return LLMStructurePlanResult(
+        status=status,
+        plan=plan,
+        confidence=min(1.0, max(0.0, confidence)),
+        reason=str(data.get("reason", "")).strip(),
+        needed_pages=sorted(set(needed_pages)),
+        notes=notes,
+    )
 
 
 def _strip_code_fence(text: str) -> str:

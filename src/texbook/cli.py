@@ -24,12 +24,22 @@ from .llm.presets import (
     load_prompt_preset,
     save_prompt_preset,
 )
+from .structure import StructureMode, StructurePlannerOptions
 
 
 class TitleSource(str, Enum):
     """Document title source strategy."""
 
     filename = "filename"
+    llm = "llm"
+
+
+class StructureOption(str, Enum):
+    """Project structure planning mode for CLI options."""
+
+    auto = "auto"
+    off = "off"
+    local = "local"
     llm = "llm"
 
 
@@ -221,6 +231,9 @@ def _build_converter(
     title_source: TitleSource | str = TitleSource.filename,
     manual_title: Optional[str] = None,
     show_date: bool = False,
+    structure: StructureOption | str = StructureOption.auto,
+    structure_chunk_pages: int = 8,
+    structure_max_pages: int = 32,
     client: Optional[OpenAICompatibleClient] = None,
 ) -> LLMPdfConverter:
     try:
@@ -236,6 +249,14 @@ def _build_converter(
                 raise ValueError("--title cannot be empty.")
         if resolved_manual_title is not None and resolved_title_source == TitleSource.llm.value:
             raise ValueError("--title cannot be used with --title-source llm.")
+        resolved_structure = (
+            structure.value if isinstance(structure, StructureOption) else str(structure)
+        )
+        structure_options = StructurePlannerOptions(
+            mode=StructureMode(resolved_structure),
+            chunk_pages=structure_chunk_pages,
+            max_pages=structure_max_pages,
+        )
 
         config = LLMConfig.from_values(
             model=model,
@@ -286,6 +307,7 @@ def _build_converter(
         title_source=resolved_title_source,
         manual_title=resolved_manual_title,
         show_date=show_date,
+        structure_options=structure_options,
     )
 
 
@@ -440,6 +462,22 @@ def extract(
         "--project",
         help="Write a directory-style LaTeX project instead of one .tex file",
     ),
+    structure: StructureOption = typer.Option(
+        StructureOption.auto,
+        "--structure",
+        case_sensitive=False,
+        help="Project structure planning mode: auto, off, local, or llm",
+    ),
+    structure_chunk_pages: int = typer.Option(
+        8,
+        "--structure-chunk-pages",
+        help="Pages per structure-planning LLM request",
+    ),
+    structure_max_pages: int = typer.Option(
+        32,
+        "--structure-max-pages",
+        help="Maximum leading pages to inspect with images for structure planning",
+    ),
     force: bool = typer.Option(
         False,
         "--force",
@@ -549,6 +587,8 @@ def extract(
         raise typer.BadParameter("--project 需要同时指定 -o/--output 项目目录。")
     if force and not project:
         raise typer.BadParameter("--force 只能与 --project 一起使用。")
+    if not project and structure != StructureOption.auto:
+        raise typer.BadParameter("--structure 只能与 --project 一起使用。")
 
     page_selection = _parse_pages(pages)
     converter = _build_converter(
@@ -573,6 +613,9 @@ def extract(
         title_source=title_source,
         manual_title=title,
         show_date=show_date,
+        structure=structure,
+        structure_chunk_pages=structure_chunk_pages,
+        structure_max_pages=structure_max_pages,
     )
     try:
         if project:
@@ -624,6 +667,22 @@ def batch(
         False,
         "--project",
         help="Write each PDF to its own directory-style LaTeX project",
+    ),
+    structure: StructureOption = typer.Option(
+        StructureOption.auto,
+        "--structure",
+        case_sensitive=False,
+        help="Project structure planning mode: auto, off, local, or llm",
+    ),
+    structure_chunk_pages: int = typer.Option(
+        8,
+        "--structure-chunk-pages",
+        help="Pages per structure-planning LLM request",
+    ),
+    structure_max_pages: int = typer.Option(
+        32,
+        "--structure-max-pages",
+        help="Maximum leading pages to inspect with images for structure planning",
     ),
     force: bool = typer.Option(
         False,
@@ -730,6 +789,8 @@ def batch(
         raise typer.BadParameter(f"Not a directory: {directory}")
     if force and not project:
         raise typer.BadParameter("--force 只能与 --project 一起使用。")
+    if not project and structure != StructureOption.auto:
+        raise typer.BadParameter("--structure 只能与 --project 一起使用。")
 
     converter = _build_converter(
         model=model,
@@ -752,6 +813,9 @@ def batch(
         preset=preset,
         title_source=title_source,
         show_date=show_date,
+        structure=structure,
+        structure_chunk_pages=structure_chunk_pages,
+        structure_max_pages=structure_max_pages,
     )
     output_dir = _resolve_output_dir(output_dir)
     page_selection = _parse_pages(pages)

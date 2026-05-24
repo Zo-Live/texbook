@@ -11,11 +11,24 @@ from threading import Event, Thread
 from typing import Iterable, Iterator, Protocol, Sequence, TextIO
 
 from ..convert.latex_converter import LatexConverter
-from ..convert.project import LatexProjectBuilder, LatexProjectResult
+from ..convert.project import LatexProjectBuilder, LatexProjectResult, LatexProjectSection
 from ..extract.base import ImageRenderOptions, PdfDocumentChunk, PdfPageContext
 from ..extract.text_extractor import TextExtractor
+from ..structure import (
+    StructureEvidence,
+    StructureMode,
+    StructurePlan,
+    StructurePlanItem,
+    StructurePlanSource,
+    StructurePlannerOptions,
+    build_chunk_fallback_plan,
+    build_local_heading_plan,
+    build_plan_from_bookmarks,
+    normalize_llm_structure_plan,
+    summarize_pages_for_structure,
+)
 from .cache import ChunkCacheOptions, ChunkCacheRun
-from .client import LLMChunkResult
+from .client import LLMChunkResult, LLMStructurePlanResult
 from .presets import PromptPreset, default_prompt_preset
 
 
@@ -45,6 +58,18 @@ class LatexChunkClient(Protocol):
     ) -> str:
         """Generate a document title from collected conversion evidence."""
 
+    def generate_structure_plan(
+        self,
+        *,
+        document_title: str,
+        evidence: StructureEvidence,
+        pages: Sequence[PdfPageContext] = (),
+        inspected_pages: Sequence[int] = (),
+        stage: str = "toc",
+        extra_prompt: str = "",
+    ) -> LLMStructurePlanResult:
+        """Generate or assess a chapter-level structure plan."""
+
 
 @dataclass
 class LLMConversionResult:
@@ -61,6 +86,16 @@ class _CollectedConversion:
     title: str
     fragments: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _CollectedProjectConversion:
+    """Project conversion output grouped by semantic sections."""
+
+    title: str
+    sections: list[LatexProjectSection] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    structure_plan: StructurePlan | None = None
 
 
 class LLMPdfConverter:
@@ -81,6 +116,7 @@ class LLMPdfConverter:
         title_source: str = "filename",
         manual_title: str | None = None,
         show_date: bool = False,
+        structure_options: StructurePlannerOptions | None = None,
         progress_stream: TextIO | None = None,
         progress_interval: float = 0.1,
     ):
@@ -118,6 +154,9 @@ class LLMPdfConverter:
         self.title_source = title_source
         self.manual_title = resolved_manual_title
         self.show_date = show_date
+        self.structure_options = structure_options or StructurePlannerOptions(
+            mode=StructureMode.auto
+        )
         self.progress_spinner = _LlmWaitSpinner(progress_stream, progress_interval)
         self.document_builder = LatexConverter()
         self.project_builder = LatexProjectBuilder()
@@ -146,10 +185,31 @@ class LLMPdfConverter:
         pages: Sequence[int] | None = None,
     ) -> LatexProjectResult:
         """Convert a PDF into an in-memory directory-style LaTeX project."""
-        collected = self._collect_conversion(pdf_path, pages=pages)
-        return self.project_builder.build(
+        if self.structure_options.mode == StructureMode.off:
+            collected = self._collect_conversion(pdf_path, pages=pages)
+            return self.project_builder.build(
+                title=collected.title,
+                fragments=collected.fragments,
+                notes=collected.notes,
+                show_date=self.show_date,
+            )
+
+        collected = self._collect_project_conversion(pdf_path, pages=pages)
+        if collected.structure_plan is None:
+            return self.project_builder.build(
+                title=collected.title,
+                fragments=[
+                    fragment
+                    for section in collected.sections
+                    for fragment in section.fragments
+                ],
+                notes=collected.notes,
+                show_date=self.show_date,
+            )
+        return self.project_builder.build_from_plan(
             title=collected.title,
-            fragments=collected.fragments,
+            sections=collected.sections,
+            structure_plan=collected.structure_plan,
             notes=collected.notes,
             show_date=self.show_date,
         )
@@ -254,6 +314,286 @@ class LLMPdfConverter:
             notes=notes,
         )
 
+    def _collect_project_conversion(
+        self,
+        pdf_path: Path,
+        *,
+        pages: Sequence[int] | None = None,
+    ) -> _CollectedProjectConversion:
+        fallback_title = pdf_path.stem
+        working_title = self.manual_title or fallback_title
+        title_evidence = _TitleEvidenceCollector(filename_title=fallback_title)
+        evidence = self.extractor.extract_structure_evidence(pdf_path, pages=pages)
+        selected_pages = evidence.effective_pages
+        if not selected_pages:
+            raise ValueError("No pages were selected for conversion.")
+
+        structure_plan = self._resolve_structure_plan(
+            pdf_path=pdf_path,
+            evidence=evidence,
+            document_title=working_title,
+            pages=pages,
+        )
+        chunk_groups = _plan_chunk_groups(
+            structure_plan,
+            chunk_pages=self.chunk_pages,
+            allowed_pages=selected_pages,
+        )
+        fallback_plan_used = structure_plan.source.value == "chunk-fallback"
+        plan_notes = list(structure_plan.notes)
+
+        sections: list[LatexProjectSection] = []
+        notes: list[str] = []
+        previous_latex_tail = ""
+        cache_run: ChunkCacheRun | None = None
+        if self.cache_options is not None:
+            cache_run = ChunkCacheRun(
+                options=self.cache_options,
+                pdf_path=pdf_path,
+                pages=pages,
+                document_title=working_title,
+                chunk_pages=self.chunk_pages,
+                image_dpi=self.image_dpi,
+                image_options=self.image_options,
+                extra_prompt=self.extra_prompt,
+                prompt_preset=self.prompt_preset,
+                title_source=self.title_source,
+                structure_plan=structure_plan,
+            )
+
+        total_chunks = sum(len(groups) for _, groups in chunk_groups)
+        chunk_index = 0
+        for item, groups in chunk_groups:
+            section_fragments: list[str] = []
+            for group in groups:
+                chunk_index += 1
+                chunk = self._load_context_chunk(
+                    pdf_path,
+                    page_numbers=group,
+                    chunk_index=chunk_index,
+                    total_chunks=total_chunks,
+                )
+                try:
+                    result = (
+                        cache_run.read(chunk, previous_latex_tail)
+                        if cache_run is not None
+                        else None
+                    )
+                    if result is None:
+                        message = f"Waiting for LLM chunk {chunk_index}/{total_chunks}"
+                        with self.progress_spinner.spin(message):
+                            result = self.client.generate_latex_chunk(
+                                document_title=working_title,
+                                pages=chunk.pages,
+                                chunk_index=chunk_index,
+                                total_chunks=total_chunks,
+                                previous_latex_tail=previous_latex_tail,
+                                extra_prompt=self.extra_prompt,
+                                prompt_preset=self.prompt_preset,
+                            )
+                        if cache_run is not None:
+                            cache_run.write(chunk, previous_latex_tail, result)
+                finally:
+                    _release_page_images(chunk.pages)
+
+                previous_latex_tail = _append_tail(
+                    previous_latex_tail,
+                    result.latex,
+                    has_previous_fragment=bool(section_fragments or sections),
+                )
+                title_evidence.add_chunk(chunk, result.latex)
+                section_fragments.append(result.latex)
+                notes.extend(result.notes)
+            sections.append(LatexProjectSection(item=item, fragments=section_fragments))
+
+        document_title = self._resolve_document_title(
+            fallback_title=fallback_title,
+            working_title=working_title,
+            title_evidence=title_evidence.build(),
+        )
+        return _CollectedProjectConversion(
+            title=document_title,
+            sections=sections,
+            notes=[*plan_notes, *notes],
+            structure_plan=None if fallback_plan_used else structure_plan,
+        )
+
+    def _resolve_structure_plan(
+        self,
+        *,
+        pdf_path: Path,
+        evidence: StructureEvidence,
+        document_title: str,
+        pages: Sequence[int] | None,
+    ) -> StructurePlan:
+        options = self.structure_options
+        selected_pages = evidence.effective_pages
+        if options.mode in {StructureMode.auto, StructureMode.local}:
+            bookmark_plan = build_plan_from_bookmarks(evidence)
+            if bookmark_plan is not None:
+                return bookmark_plan
+            if options.mode == StructureMode.local:
+                local_plan = build_local_heading_plan(evidence)
+                if local_plan is not None:
+                    return local_plan
+                return build_chunk_fallback_plan(
+                    _chunk_page_numbers(selected_pages, self.chunk_pages),
+                    note="本地结构线索不足，已回退到按 LLM chunk 划分章节文件。",
+                )
+
+        if options.mode in {StructureMode.auto, StructureMode.llm}:
+            try:
+                llm_plan = self._generate_llm_structure_plan(
+                    pdf_path=pdf_path,
+                    evidence=evidence,
+                    document_title=document_title,
+                    pages=pages,
+                )
+            except Exception:
+                if options.mode == StructureMode.llm:
+                    raise
+                llm_plan = None
+            if llm_plan is not None:
+                return llm_plan
+            if options.mode == StructureMode.llm:
+                raise ValueError("LLM did not return a usable structure plan.")
+
+        local_plan = build_local_heading_plan(evidence)
+        if local_plan is not None and options.mode == StructureMode.local:
+            return local_plan
+        return build_chunk_fallback_plan(
+            _chunk_page_numbers(selected_pages, self.chunk_pages),
+        )
+
+    def _generate_llm_structure_plan(
+        self,
+        *,
+        pdf_path: Path,
+        evidence: StructureEvidence,
+        document_title: str,
+        pages: Sequence[int] | None,
+    ) -> StructurePlan | None:
+        selected_pages = evidence.effective_pages
+        page_batches = _chunk_page_numbers(
+            selected_pages[: self.structure_options.max_pages],
+            self.structure_options.chunk_pages,
+        )
+        inspected_pages: list[int] = []
+        last_result: LLMStructurePlanResult | None = None
+
+        for batch in page_batches:
+            chunk_pages = self._load_structure_pages(
+                pdf_path,
+                page_numbers=batch,
+            )
+            inspected_pages.extend(summarize_pages_for_structure(chunk_pages))
+            try:
+                with self.progress_spinner.spin("Waiting for LLM structure plan"):
+                    result = self.client.generate_structure_plan(
+                        document_title=document_title,
+                        evidence=evidence,
+                        pages=chunk_pages,
+                        inspected_pages=inspected_pages,
+                        stage="toc",
+                        extra_prompt=self.extra_prompt,
+                    )
+            finally:
+                _release_page_images(chunk_pages)
+
+            last_result = result
+            if result.status == "complete":
+                return normalize_llm_structure_plan(
+                    items=result.plan,
+                    source=StructurePlanSource.llm_toc,
+                    confidence=result.confidence,
+                    selected_pages=selected_pages,
+                    inspected_pages=inspected_pages,
+                    notes=[*result.notes, result.reason],
+                )
+            if result.status == "insufficient":
+                break
+
+        with self.progress_spinner.spin("Waiting for LLM heading structure plan"):
+            heading_result = self.client.generate_structure_plan(
+                document_title=document_title,
+                evidence=evidence,
+                pages=[],
+                inspected_pages=inspected_pages,
+                stage="headings",
+                extra_prompt=self.extra_prompt,
+            )
+        if heading_result.status != "complete":
+            if last_result is not None and last_result.reason:
+                return None
+            return None
+
+        return normalize_llm_structure_plan(
+            items=heading_result.plan,
+            source=StructurePlanSource.llm_headings,
+            confidence=heading_result.confidence,
+            selected_pages=selected_pages,
+            inspected_pages=inspected_pages,
+            notes=[*heading_result.notes, heading_result.reason],
+        )
+
+    def _load_context_chunk(
+        self,
+        pdf_path: Path,
+        *,
+        page_numbers: Sequence[int],
+        chunk_index: int,
+        total_chunks: int,
+    ) -> PdfDocumentChunk:
+        chunks = self.extractor.iter_context_chunks(
+            pdf_path,
+            pages=page_numbers,
+            image_dpi=self.image_dpi,
+            include_images=True,
+            image_options=self.image_options,
+            chunk_size=len(page_numbers),
+        )
+        iterator = iter(chunks)
+        try:
+            chunk = next(iterator)
+        except StopIteration as exc:
+            raise ValueError("No pages were selected for conversion.") from exc
+        finally:
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
+        return PdfDocumentChunk(
+            source_file=chunk.source_file,
+            title=chunk.title,
+            chunk_index=chunk_index,
+            total_chunks=total_chunks,
+            pages=chunk.pages,
+        )
+
+    def _load_structure_pages(
+        self,
+        pdf_path: Path,
+        *,
+        page_numbers: Sequence[int],
+    ) -> list[PdfPageContext]:
+        chunks = self.extractor.iter_context_chunks(
+            pdf_path,
+            pages=page_numbers,
+            image_dpi=self.image_dpi,
+            include_images=True,
+            image_options=self.image_options,
+            chunk_size=max(1, len(page_numbers)),
+        )
+        iterator = iter(chunks)
+        try:
+            chunk = next(iterator)
+        except StopIteration:
+            return []
+        finally:
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
+        return chunk.pages
+
     def _resolve_document_title(
         self,
         *,
@@ -285,6 +625,36 @@ def _chunk_pages(
     chunk_size: int,
 ) -> list[list[PdfPageContext]]:
     return [list(pages[index : index + chunk_size]) for index in range(0, len(pages), chunk_size)]
+
+
+def _chunk_page_numbers(
+    pages: Sequence[int],
+    chunk_size: int,
+) -> list[list[int]]:
+    return [
+        list(pages[index : index + chunk_size])
+        for index in range(0, len(pages), chunk_size)
+    ]
+
+
+def _plan_chunk_groups(
+    plan: StructurePlan,
+    *,
+    chunk_pages: int,
+    allowed_pages: Sequence[int] | None = None,
+) -> list[tuple[StructurePlanItem, list[list[int]]]]:
+    allowed = list(allowed_pages) if allowed_pages is not None else plan.page_numbers
+    groups: list[tuple[StructurePlanItem, list[list[int]]]] = []
+    for item in plan.items:
+        item_pages = [
+            page
+            for page in allowed
+            if item.start_page <= page <= item.end_page
+        ]
+        if not item_pages:
+            continue
+        groups.append((item, _chunk_page_numbers(item_pages, chunk_pages)))
+    return groups
 
 
 def _tail(text: str, max_chars: int = 2000) -> str:

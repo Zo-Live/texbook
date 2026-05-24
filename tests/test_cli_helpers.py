@@ -376,6 +376,9 @@ def test_conversion_commands_expose_project_options(command):
     assert result.exit_code == 0
     assert "--project" in result.output
     assert "--force" in result.output
+    assert "--structure" in result.output
+    assert "--structure-chunk" in result.output
+    assert "--structure-max" in result.output
 
 
 def test_presets_cli_adds_and_shows_repository_preset(tmp_path, monkeypatch):
@@ -485,6 +488,64 @@ def test_extract_rejects_force_without_project_before_conversion(tmp_path, monke
     assert result.exit_code != 0
     assert "--project" in result.output
     assert "Traceback" not in result.output
+
+
+def test_extract_rejects_structure_without_project_before_conversion(tmp_path, monkeypatch):
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+
+    def fail_build_converter(**kwargs):
+        raise AssertionError("converter should not be built")
+
+    monkeypatch.setattr(cli_module, "_build_converter", fail_build_converter)
+
+    result = runner.invoke(app, ["extract", str(source), "--structure", "off"])
+
+    assert result.exit_code != 0
+    assert "--project" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_extract_project_passes_structure_options_to_converter(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_module, "_repo_root", lambda: tmp_path)
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"pdf")
+    captured = {}
+
+    class ProjectConverter:
+        def convert_project(self, pdf_path, *, pages=None):
+            return LatexProjectResult(
+                files={PurePosixPath("main.tex"): "main"},
+                entrypoint=PurePosixPath("main.tex"),
+            )
+
+    def build_converter(**kwargs):
+        captured.update(kwargs)
+        return ProjectConverter()
+
+    monkeypatch.setattr(cli_module, "_build_converter", build_converter)
+
+    result = runner.invoke(
+        app,
+        [
+            "extract",
+            str(source),
+            "--project",
+            "-o",
+            "book",
+            "--structure",
+            "llm",
+            "--structure-chunk-pages",
+            "3",
+            "--structure-max-pages",
+            "9",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["structure"].value == "llm"
+    assert captured["structure_chunk_pages"] == 3
+    assert captured["structure_max_pages"] == 9
 
 
 def test_extract_project_rejects_nonempty_directory_without_force(tmp_path, monkeypatch):
@@ -772,6 +833,23 @@ def test_batch_rejects_force_without_project_before_conversion(tmp_path, monkeyp
     monkeypatch.setattr(cli_module, "_build_converter", fail_build_converter)
 
     result = runner.invoke(app, ["batch", str(input_dir), "--force"])
+
+    assert result.exit_code != 0
+    assert "--project" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_batch_rejects_structure_without_project_before_conversion(tmp_path, monkeypatch):
+    input_dir = tmp_path / "docs"
+    input_dir.mkdir()
+    (input_dir / "sample.pdf").write_bytes(b"pdf")
+
+    def fail_build_converter(**kwargs):
+        raise AssertionError("converter should not be built")
+
+    monkeypatch.setattr(cli_module, "_build_converter", fail_build_converter)
+
+    result = runner.invoke(app, ["batch", str(input_dir), "--structure", "off"])
 
     assert result.exit_code != 0
     assert "--project" in result.output
