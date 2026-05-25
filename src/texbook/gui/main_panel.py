@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from texbook.gui.executor import GuiTaskExecutor
+from texbook.gui.executor import GuiOverwriteConfirmationRequest, GuiTaskExecutor
 from texbook.gui.resources import APP_DISPLAY_NAME
 from texbook.gui.selection import (
     GuiInputKind,
@@ -951,6 +952,7 @@ class ConversionMainPanel(QWidget):
         executor.task_failed.connect(self._handle_executor_task_failed)
         executor.task_canceling.connect(self._handle_executor_task_canceling)
         executor.task_canceled.connect(self._handle_executor_task_canceled)
+        executor.overwrite_confirmation_requested.connect(self._handle_overwrite_confirmation_requested)
         executor.all_finished.connect(self._handle_executor_finished)
         self._publish_status_message(f"开始执行 {len(pending_tasks)} 个任务")
         self._refresh_action_state()
@@ -1043,6 +1045,24 @@ class ConversionMainPanel(QWidget):
         mark_task_canceled(state)
         self._refresh_task_summary()
         self._publish_status_message(f"已取消：{state.label}")
+
+    def _handle_overwrite_confirmation_requested(self, request: object) -> None:
+        if not isinstance(request, GuiOverwriteConfirmationRequest):
+            return
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle("确认覆盖")
+        task_label = request.task_label or request.task_id or "当前任务"
+        message.setText(f"{request.summary}：{task_label}")
+        message.setInformativeText(f"{request.details}\n\n目标：{request.target}")
+        message.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        message.setDefaultButton(QMessageBox.StandardButton.No)
+        message.button(QMessageBox.StandardButton.Yes).setText("覆盖")
+        message.button(QMessageBox.StandardButton.No).setText("取消")
+        approved = message.exec() == QMessageBox.StandardButton.Yes
+        request.resolve(approved)
 
     def _handle_executor_finished(self) -> None:
         if self._executor is not None:

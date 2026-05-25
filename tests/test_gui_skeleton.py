@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -29,11 +30,14 @@ from texbook.gui.app import create_application  # noqa: E402
 from texbook.gui.core_adapter import build_core_conversion_bundle  # noqa: E402
 from texbook.gui.executor import (  # noqa: E402
     GuiCancellationToken,
+    GuiOverwriteConfirmationRequest,
     GuiTaskCanceled,
+    GuiTaskExecutor,
     GuiTaskExecutionError,
+    GuiWritePolicy,
     run_gui_conversion_task,
-    write_project_result_conservatively,
-    write_tex_result_conservatively,
+    write_project_result,
+    write_tex_result,
 )
 from texbook.gui.main_panel import ConversionMainPanel  # noqa: E402
 from texbook.gui.main_window import MainWindow  # noqa: E402
@@ -112,6 +116,7 @@ class _FakeExecutor:
         self.task_failed = _FakeSignal()
         self.task_canceling = _FakeSignal()
         self.task_canceled = _FakeSignal()
+        self.overwrite_confirmation_requested = _FakeSignal()
         self.all_finished = _FakeSignal()
 
     def start(self):
@@ -782,25 +787,61 @@ def test_task_view_state_tracks_runtime_updates_and_progress_events(monkeypatch)
     assert state.error == "LLM failed"
 
 
-def test_gui_conservative_tex_write_refuses_existing_target(tmp_path):
+def test_gui_tex_write_confirms_existing_target(tmp_path):
     target = tmp_path / "out" / "lecture.tex"
+    confirmations = []
 
-    written = write_tex_result_conservatively("% hello\n", target)
+    written = write_tex_result("% hello\n", target)
 
     assert written == target
     assert target.read_text(encoding="utf-8") == "% hello\n"
 
+    written = write_tex_result(
+        "% overwrite\n",
+        target,
+        policy=GuiWritePolicy(overwrite_confirmer=lambda request: confirmations.append(request) or True),
+    )
+
+    assert written == target
+    assert target.read_text(encoding="utf-8") == "% overwrite\n"
+    assert confirmations[0].summary == "覆盖已有 LaTeX 文件"
+
+
+def test_gui_tex_write_keeps_existing_target_when_confirmation_is_rejected(tmp_path):
+    target = tmp_path / "lecture.tex"
+    target.write_text("% old\n", encoding="utf-8")
+
     try:
-        write_tex_result_conservatively("% overwrite\n", target)
+        write_tex_result(
+            "% new\n",
+            target,
+            policy=GuiWritePolicy(overwrite_confirmer=lambda _request: False),
+        )
     except GuiTaskExecutionError as exc:
-        assert "输出文件已存在" in str(exc)
+        assert "用户取消覆盖" in str(exc)
     else:
-        raise AssertionError("expected existing .tex output to fail")
+        raise AssertionError("expected rejected overwrite to fail")
 
-    assert target.read_text(encoding="utf-8") == "% hello\n"
+    assert target.read_text(encoding="utf-8") == "% old\n"
 
 
-def test_gui_conservative_project_write_refuses_nonempty_directory(tmp_path):
+def test_gui_tex_write_silently_overwrites_when_confirmation_disabled(tmp_path):
+    target = tmp_path / "lecture.tex"
+    target.write_text("% old\n", encoding="utf-8")
+
+    write_tex_result(
+        "% new\n",
+        target,
+        policy=GuiWritePolicy(
+            confirm_overwrite=False,
+            overwrite_confirmer=lambda _request: (_ for _ in ()).throw(AssertionError("unexpected confirmation")),
+        ),
+    )
+
+    assert target.read_text(encoding="utf-8") == "% new\n"
+
+
+def test_gui_project_write_confirms_and_clears_nonempty_directory(tmp_path):
     project = LatexProjectResult(
         files={
             PurePosixPath("main.tex"): "% main\n",
@@ -810,19 +851,106 @@ def test_gui_conservative_project_write_refuses_nonempty_directory(tmp_path):
         notes=["done"],
     )
     target = tmp_path / "project"
+    old_nested = target / "old" / "stale.txt"
 
-    entrypoint = write_project_result_conservatively(project, target)
+    entrypoint = write_project_result(project, target)
 
     assert entrypoint == target / "main.tex"
     assert (target / "main.tex").read_text(encoding="utf-8") == "% main\n"
     assert (target / "chapters" / "chapter01.tex").exists()
 
+    old_nested.parent.mkdir()
+    old_nested.write_text("old", encoding="utf-8")
+
+    entrypoint = write_project_result(
+        project,
+        target,
+        policy=GuiWritePolicy(overwrite_confirmer=lambda _request: True),
+    )
+
+    assert entrypoint == target / "main.tex"
+    assert not old_nested.exists()
+    assert (target / "chapters" / "chapter01.tex").read_text(encoding="utf-8") == "% body\n"
+
+
+def test_gui_project_write_keeps_nonempty_directory_when_confirmation_is_rejected(tmp_path):
+    project = LatexProjectResult(
+        files={PurePosixPath("main.tex"): "% new\n"},
+        entrypoint=PurePosixPath("main.tex"),
+    )
+    target = tmp_path / "project"
+    target.mkdir()
+    old = target / "old.txt"
+    old.write_text("old", encoding="utf-8")
+
     try:
-        write_project_result_conservatively(project, target)
+        write_project_result(
+            project,
+            target,
+            policy=GuiWritePolicy(overwrite_confirmer=lambda _request: False),
+        )
     except GuiTaskExecutionError as exc:
-        assert "项目输出目录非空" in str(exc)
+        assert "用户取消覆盖" in str(exc)
     else:
-        raise AssertionError("expected nonempty project output to fail")
+        raise AssertionError("expected rejected project overwrite to fail")
+
+    assert old.read_text(encoding="utf-8") == "old"
+    assert not (target / "main.tex").exists()
+
+
+def test_gui_project_write_rejects_file_path_and_dangerous_directory(tmp_path):
+    project = LatexProjectResult(
+        files={PurePosixPath("main.tex"): "% main\n"},
+        entrypoint=PurePosixPath("main.tex"),
+    )
+    file_target = tmp_path / "project"
+    file_target.write_text("not a directory", encoding="utf-8")
+
+    try:
+        write_project_result(project, file_target)
+    except GuiTaskExecutionError as exc:
+        assert "不是目录" in str(exc)
+    else:
+        raise AssertionError("expected file project target to fail")
+
+    dangerous = tmp_path / "repo"
+    dangerous.mkdir()
+    (dangerous / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+
+    try:
+        write_project_result(
+            project,
+            dangerous,
+            policy=GuiWritePolicy(confirm_overwrite=False),
+        )
+    except GuiTaskExecutionError as exc:
+        assert "疑似项目根目录" in str(exc)
+    else:
+        raise AssertionError("expected dangerous project target to fail")
+
+
+def test_gui_project_write_rejects_package_subdirectory(tmp_path):
+    project = LatexProjectResult(
+        files={PurePosixPath("main.tex"): "% main\n"},
+        entrypoint=PurePosixPath("main.tex"),
+    )
+    dangerous = ROOT / "src" / "texbook" / "__stage4_probe"
+    dangerous.mkdir()
+    (dangerous / "old.txt").write_text("old", encoding="utf-8")
+
+    try:
+        write_project_result(
+            project,
+            dangerous,
+            policy=GuiWritePolicy(confirm_overwrite=False),
+        )
+    except GuiTaskExecutionError as exc:
+        assert "危险项目目录" in str(exc)
+    else:
+        raise AssertionError("expected package subdirectory target to fail")
+    finally:
+        (dangerous / "old.txt").unlink(missing_ok=True)
+        dangerous.rmdir()
 
 
 def test_run_gui_conversion_task_writes_tex_and_forwards_progress(tmp_path, monkeypatch):
@@ -850,6 +978,91 @@ def test_run_gui_conversion_task_writes_tex_and_forwards_progress(tmp_path, monk
     assert result.notes == ("note",)
     assert (tmp_path / "lecture.tex").read_text(encoding="utf-8") == "% lecture.pdf\n"
     assert [event.kind for event in events] == ["stage_completed"]
+
+
+def test_run_gui_conversion_task_uses_task_overwrite_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    target = tmp_path / "lecture.tex"
+    target.write_text("% old\n", encoding="utf-8")
+    task = create_conversion_tasks(
+        GuiConversionSettings(
+            path_state=GuiPathSelectionState(
+                input_selection=GuiInputSelection.from_single_file("lecture.pdf"),
+                output_directory=str(target),
+            ),
+            confirm_overwrite=True,
+        ),
+        repo_root=ROOT,
+    )[0]
+    confirmations = []
+
+    result = run_gui_conversion_task(
+        task,
+        converter_factory=lambda _task, reporter: _FakeConverter(reporter),
+        overwrite_confirmer=lambda request: confirmations.append(request) or True,
+    )
+
+    assert result.result == str(target)
+    assert target.read_text(encoding="utf-8") == "% lecture.pdf\n"
+    assert confirmations[0].task_id == task.task_id
+    assert confirmations[0].task_label == "lecture.pdf"
+
+
+def test_run_gui_conversion_task_silently_overwrites_when_confirmation_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    target = tmp_path / "lecture.tex"
+    target.write_text("% old\n", encoding="utf-8")
+    task = create_conversion_tasks(
+        GuiConversionSettings(
+            path_state=GuiPathSelectionState(
+                input_selection=GuiInputSelection.from_single_file("lecture.pdf"),
+                output_directory=str(target),
+            ),
+            confirm_overwrite=False,
+        ),
+        repo_root=ROOT,
+    )[0]
+
+    run_gui_conversion_task(
+        task,
+        converter_factory=lambda _task, reporter: _FakeConverter(reporter),
+        overwrite_confirmer=lambda _request: (_ for _ in ()).throw(AssertionError("unexpected confirmation")),
+    )
+
+    assert target.read_text(encoding="utf-8") == "% lecture.pdf\n"
+
+
+def test_gui_task_executor_fails_instead_of_hanging_without_confirmation_receiver(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    target = tmp_path / "lecture.tex"
+    target.write_text("% old\n", encoding="utf-8")
+    task = create_conversion_tasks(
+        GuiConversionSettings(
+            path_state=GuiPathSelectionState(
+                input_selection=GuiInputSelection.from_single_file("lecture.pdf"),
+                output_directory=str(target),
+            ),
+            confirm_overwrite=True,
+        ),
+        repo_root=ROOT,
+    )[0]
+    executor = GuiTaskExecutor(
+        [task],
+        converter_factory=lambda _task, reporter: _FakeConverter(reporter),
+    )
+    failures = []
+    finished = []
+    executor.task_failed.connect(lambda task_id, error: failures.append((task_id, error)))
+    executor.all_finished.connect(lambda: finished.append(True))
+
+    executor._run_task(task)
+
+    assert failures == [(task.task_id, f"需要确认覆盖：{target}")]
+    assert finished == []
+    assert target.read_text(encoding="utf-8") == "% old\n"
 
 
 def test_run_gui_conversion_task_writes_project_output(tmp_path, monkeypatch):
@@ -1041,6 +1254,54 @@ def test_conversion_panel_cancels_pending_and_running_tasks(monkeypatch):
     executor.task_canceled.emit(second_id)
     assert panel.findChild(QLabel, f"taskStatusBadge_{second_id}").text() == "已取消"
     assert panel.findChild(QPushButton, "startButton").isEnabled() is False
+
+    window.close()
+    app.quit()
+
+
+def test_conversion_panel_resolves_overwrite_confirmation(monkeypatch):
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: QMessageBox.StandardButton.Yes)
+    request = GuiOverwriteConfirmationRequest(
+        task_id="task",
+        task_label="lecture.pdf",
+        target=Path("out/lecture.tex"),
+        output_kind=GuiOutputKind.tex_file,
+        summary="覆盖已有 LaTeX 文件",
+        details="将替换目标 .tex 文件，同目录其它文件不会被清理。",
+    )
+
+    panel._handle_overwrite_confirmation_requested(request)
+
+    assert request.wait() is True
+
+    window.close()
+    app.quit()
+
+
+def test_conversion_panel_can_reject_overwrite_confirmation(monkeypatch):
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: QMessageBox.StandardButton.No)
+    request = GuiOverwriteConfirmationRequest(
+        task_id="task",
+        task_label="lecture.pdf",
+        target=Path("out/lecture.tex"),
+        output_kind=GuiOutputKind.tex_file,
+        summary="覆盖已有 LaTeX 文件",
+        details="将替换目标 .tex 文件，同目录其它文件不会被清理。",
+    )
+
+    panel._handle_overwrite_confirmation_requested(request)
+
+    assert request.wait() is False
 
     window.close()
     app.quit()
