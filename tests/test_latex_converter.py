@@ -17,6 +17,11 @@ from texbook.convert.project import (
     LatexProjectResult,
     LatexProjectSection,
 )
+from texbook.output_options import (
+    BeamerBoxStyle,
+    CtexFontProfile,
+    LatexOutputOptions,
+)
 from texbook.structure import (
     StructureItemKind,
     StructurePlan,
@@ -194,7 +199,11 @@ def test_project_builder_builds_main_preamble_and_chapters():
         PurePosixPath("chapters/chapter02.tex"),
     }
     assert project.notes == ["removed header/footer"]
-    assert project.metadata == {"document_class": "ctexart"}
+    assert project.metadata["document_class"] == "ctexart"
+    assert project.metadata["output_options"] == {
+        "beamer_box_style": "block",
+        "ctex_font_profile": "default",
+    }
 
     main = project.files[PurePosixPath("main.tex")]
     assert "% !TEX program = xelatex" in main
@@ -279,6 +288,121 @@ def test_project_builder_can_emit_ctexbeamer_project():
     assert r"\frametitle{集合}" in chapter
     assert r"\begin{block}{注意}" in chapter
     assert project.metadata["document_class"] == "ctexbeamer"
+
+
+def test_ctex_local_font_profile_uses_fontset_none_and_local_fonts():
+    converter = LatexConverter(
+        document_class=LatexDocumentClass.ctexbeamer,
+        output_options=LatexOutputOptions(
+            ctex_font_profile=CtexFontProfile.local,
+        ),
+    )
+
+    assert converter.documentclass_line() == (
+        r"\documentclass[UTF8,fontset=none]{ctexbeamer}"
+    )
+    preamble = "\n".join(converter.preamble_lines())
+    assert "AR PL UMing CN" in preamble
+    assert "WenQuanYi Zen Hei" in preamble
+    assert "Fandol" not in preamble
+
+
+def test_project_builder_can_emit_tcolorbox_beamer_project():
+    builder = LatexProjectBuilder(
+        output_options=LatexOutputOptions(
+            beamer_box_style=BeamerBoxStyle.tcolorbox,
+        )
+    )
+
+    project = builder.build(
+        title="幻灯片",
+        document_class=LatexDocumentClass.ctexbeamer,
+        fragments=[
+            r"""
+            \begin{frame}
+            \frametitle{集合}
+            \begin{texbookinfobox}{注意}
+            正文
+            \end{texbookinfobox}
+            \end{frame}
+            """
+        ],
+    )
+
+    preamble = project.files[PurePosixPath("preamble.tex")]
+    chapter = project.files[PurePosixPath("chapters/chapter01.tex")]
+
+    assert r"\usepackage[most]{tcolorbox}" in preamble
+    assert r"\newtcolorbox{texbookinfobox}" in preamble
+    assert r"\begin{texbookinfobox}{注意}" in chapter
+    assert project.metadata["output_options"]["beamer_box_style"] == "tcolorbox"
+
+
+def test_project_builder_folds_beamer_title_only_frontmatter_into_subtitle():
+    builder = LatexProjectBuilder()
+    plan = StructurePlan(
+        source=StructurePlanSource.llm_toc,
+        confidence=0.8,
+        items=[
+            StructurePlanItem(
+                kind=StructureItemKind.frontmatter,
+                title="第六章 线性空间",
+                start_page=1,
+                end_page=1,
+                confidence=0.8,
+                source=StructurePlanSource.llm_toc,
+            ),
+            StructurePlanItem(
+                kind=StructureItemKind.chapter,
+                title="集合",
+                start_page=2,
+                end_page=4,
+                confidence=0.8,
+                source=StructurePlanSource.llm_toc,
+            ),
+        ],
+    )
+
+    project = builder.build_from_plan(
+        title="6.1 集合与映射",
+        document_class=LatexDocumentClass.ctexbeamer,
+        structure_plan=plan,
+        sections=[
+            LatexProjectSection(
+                item=plan.items[0],
+                fragments=[
+                    r"""
+                    \section*{第六章 线性空间}
+                    \begin{frame}
+                    \frametitle{第六章 线性空间}
+                    % TODO: figure pending_asset: logo
+                    \end{frame}
+                    """
+                ],
+            ),
+            LatexProjectSection(
+                item=plan.items[1],
+                fragments=[
+                    r"""
+                    \begin{frame}
+                    \frametitle{6.1 集合与映射}
+                    \begin{itemize}
+                    \item 集合
+                    \item 映射
+                    \end{itemize}
+                    \end{frame}
+                    """
+                ],
+            ),
+        ],
+    )
+
+    main = project.files[PurePosixPath("main.tex")]
+
+    assert PurePosixPath("chapters/frontmatter.tex") not in project.files
+    assert r"\subtitle{第六章 线性空间}" in main
+    assert r"\input{chapters/chapter01}" in main
+    assert "frontmatter" not in main
 
 
 def test_non_beamer_project_cleans_beamer_only_wrappers():

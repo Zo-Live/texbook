@@ -7,6 +7,12 @@ from typing import List, Sequence
 from ..complex_content import replace_unsupported_graphics_references
 from ..document_class import LatexDocumentClass
 from ..extract.base import ExtractedContent
+from ..output_options import (
+    BeamerBoxStyle,
+    CtexFontProfile,
+    DEFAULT_OUTPUT_OPTIONS,
+    LatexOutputOptions,
+)
 
 
 _DOCUMENTCLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}")
@@ -106,6 +112,7 @@ class LatexConverter:
         self,
         use_ctex: bool = True,
         document_class: LatexDocumentClass | str | None = None,
+        output_options: LatexOutputOptions | None = None,
     ):
         if document_class is None:
             self.document_class = (
@@ -116,6 +123,7 @@ class LatexConverter:
         else:
             self.document_class = LatexDocumentClass.from_value(str(document_class))
         self.use_ctex = self.document_class.is_ctex
+        self.output_options = output_options or DEFAULT_OUTPUT_OPTIONS
 
     def convert(self, content: ExtractedContent, *, show_date: bool = False) -> str:
         lines: List[str] = []
@@ -204,14 +212,22 @@ class LatexConverter:
 
     def documentclass_line(self) -> str:
         """Return the configured documentclass line."""
+        if (
+            self.document_class.is_ctex
+            and self.output_options.ctex_font_profile == CtexFontProfile.local
+        ):
+            return rf"\documentclass[UTF8,fontset=none]{{{self.document_class.value}}}"
         return self.document_class.documentclass_line()
 
     def preamble_lines(self) -> list[str]:
         """Return package and theorem definitions shared by all output modes."""
+        font_lines = self._ctex_font_lines()
         if self.document_class.is_beamer:
-            return [
+            lines = [
+                *font_lines,
                 r"\usepackage{amsmath}",
                 r"\usepackage{amssymb}",
+                *self._beamer_box_lines(),
                 r"\makeatletter",
                 r"\@ifundefined{definition}{\newtheorem{definition}{定义}}{}",
                 r"\@ifundefined{theorem}{\newtheorem{theorem}{定理}}{}",
@@ -221,7 +237,9 @@ class LatexConverter:
                 r"\@ifundefined{example}{\newtheorem{example}{例}}{}",
                 r"\makeatother",
             ]
+            return lines
         return [
+            *font_lines,
             r"\usepackage{amsmath}",
             r"\usepackage{amsthm}",
             r"\usepackage{amssymb}",
@@ -243,12 +261,19 @@ class LatexConverter:
             ]
         return [r"\maketitle"]
 
-    def title_block_lines(self, title: str, *, show_date: bool = False) -> list[str]:
+    def title_block_lines(
+        self,
+        title: str,
+        *,
+        show_date: bool = False,
+        subtitle: str | None = None,
+    ) -> list[str]:
         """Return title and date lines for a LaTeX document wrapper."""
-        return [
-            r"\title{" + self._escape_latex(title) + "}",
-            self._date_line(show_date),
-        ]
+        lines = [r"\title{" + self._escape_latex(title) + "}"]
+        if self.document_class.is_beamer and subtitle:
+            lines.append(r"\subtitle{" + self._escape_latex(subtitle) + "}")
+        lines.append(self._date_line(show_date))
+        return lines
 
     def note_comment_lines(self, notes: Sequence[str]) -> list[str]:
         """Return sanitized LLM notes as LaTeX comments."""
@@ -291,6 +316,36 @@ class LatexConverter:
             r"\begin{document}",
             *self.title_page_lines(),
             "",
+        ]
+
+    def _ctex_font_lines(self) -> list[str]:
+        if (
+            not self.document_class.is_ctex
+            or self.output_options.ctex_font_profile != CtexFontProfile.local
+        ):
+            return []
+        return [
+            r"\setCJKmainfont[Script=Default,BoldFont={WenQuanYi Zen Hei},ItalicFont={AR PL KaitiM GB}]{AR PL UMing CN}",
+            r"\setCJKsansfont[Script=Default,BoldFont={WenQuanYi Zen Hei},ItalicFont={AR PL KaitiM GB}]{WenQuanYi Zen Hei}",
+            r"\setCJKmonofont[Script=Default]{WenQuanYi Zen Hei Mono}",
+            r"\setCJKfamilyfont{zhsong}[Script=Default,BoldFont={WenQuanYi Zen Hei},ItalicFont={AR PL KaitiM GB}]{AR PL UMing CN}",
+            r"\setCJKfamilyfont{zhhei}[Script=Default,BoldFont={WenQuanYi Zen Hei},ItalicFont={AR PL KaitiM GB}]{WenQuanYi Zen Hei}",
+            r"\setCJKfamilyfont{zhkai}[Script=Default]{AR PL KaitiM GB}",
+            r"\providecommand{\songti}{\CJKfamily{zhsong}}",
+            r"\providecommand{\heiti}{\CJKfamily{zhhei}}",
+            r"\providecommand{\kaishu}{\CJKfamily{zhkai}}",
+        ]
+
+    def _beamer_box_lines(self) -> list[str]:
+        if self.output_options.beamer_box_style != BeamerBoxStyle.tcolorbox:
+            return []
+        return [
+            r"\usepackage[most]{tcolorbox}",
+            r"\tcbset{texbookbox/.style={enhanced,breakable,sharp corners,boxrule=0.4pt,left=1mm,right=1mm,top=1mm,bottom=1mm,fonttitle=\bfseries}}",
+            r"\newtcolorbox{texbookinfobox}[2][]{texbookbox,colback=blue!4!white,colframe=blue!65!black,title={#2},#1}",
+            r"\newtcolorbox{texbookexamplebox}[2][]{texbookbox,colback=green!5!white,colframe=green!45!black,title={#2},#1}",
+            r"\newtcolorbox{texbookalertbox}[2][]{texbookbox,colback=red!4!white,colframe=red!65!black,title={#2},#1}",
+            r"\newtcolorbox{texbookplainbox}[2][]{texbookbox,colback=black!3!white,colframe=black!50,title={#2},#1}",
         ]
 
     def _date_line(self, show_date: bool) -> str:

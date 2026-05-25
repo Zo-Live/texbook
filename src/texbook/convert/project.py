@@ -7,6 +7,7 @@ from typing import Sequence
 
 from ..complex_content import collect_complex_content_candidates, complex_content_metadata
 from ..document_class import LatexDocumentClass
+from ..output_options import DEFAULT_OUTPUT_OPTIONS, LatexOutputOptions
 from ..structure import StructureItemKind, StructurePlan, StructurePlanItem
 from .latex_converter import LatexConverter
 
@@ -43,8 +44,14 @@ class LatexProjectBuilder:
         self,
         use_ctex: bool = True,
         document_class: LatexDocumentClass | str | None = None,
+        output_options: LatexOutputOptions | None = None,
     ):
-        self.latex = LatexConverter(use_ctex=use_ctex, document_class=document_class)
+        self.output_options = output_options or DEFAULT_OUTPUT_OPTIONS
+        self.latex = LatexConverter(
+            use_ctex=use_ctex,
+            document_class=document_class,
+            output_options=self.output_options,
+        )
 
     def build(
         self,
@@ -61,6 +68,7 @@ class LatexProjectBuilder:
         chapter_paths = self._chapter_paths(len(cleaned_fragments))
         metadata = {
             "document_class": latex.document_class.value,
+            "output_options": latex.output_options.to_metadata(),
             **complex_content_metadata(
                 collect_complex_content_candidates(
                     fragments=cleaned_fragments,
@@ -102,22 +110,30 @@ class LatexProjectBuilder:
     ) -> LatexProjectResult:
         """Build a project whose files follow a semantic structure plan."""
         latex = self._latex_for(document_class)
-        section_files = self._planned_section_files(sections)
-        input_entries = [
-            (section.item.kind, path)
-            for section, path in zip(sections, section_files, strict=True)
-        ]
         cleaned_section_fragments = [
             latex.clean_body_fragments(section.fragments)
             for section in sections
         ]
+        subtitle, kept_sections, kept_section_fragments = (
+            self._fold_beamer_title_sections(
+                latex,
+                sections,
+                cleaned_section_fragments,
+            )
+        )
+        section_files = self._planned_section_files(kept_sections)
+        input_entries = [
+            (section.item.kind, path)
+            for section, path in zip(kept_sections, section_files, strict=True)
+        ]
         all_fragments = [
             fragment
-            for fragments in cleaned_section_fragments
+            for fragments in kept_section_fragments
             for fragment in fragments
         ]
         metadata = {
             "document_class": latex.document_class.value,
+            "output_options": latex.output_options.to_metadata(),
             "structure_plan": structure_plan.to_metadata(),
             **complex_content_metadata(
                 collect_complex_content_candidates(
@@ -131,9 +147,9 @@ class LatexProjectBuilder:
             PurePosixPath("preamble.tex"): self._build_preamble(latex),
         }
         for section, path, fragments in zip(
-            sections,
+            kept_sections,
             section_files,
-            cleaned_section_fragments,
+            kept_section_fragments,
             strict=True,
         ):
             files[path] = self._build_section_file(latex, section, fragments)
@@ -146,6 +162,7 @@ class LatexProjectBuilder:
             notes=notes or [],
             show_date=show_date,
             input_kinds=[kind for kind, _ in input_entries],
+            subtitle=subtitle,
         )
         return LatexProjectResult(
             files=files,
@@ -163,13 +180,14 @@ class LatexProjectBuilder:
         notes: Sequence[str],
         show_date: bool,
         input_kinds: Sequence[StructureItemKind] | None = None,
+        subtitle: str | None = None,
     ) -> str:
         lines = [
             "% !TEX program = xelatex",
             latex.documentclass_line(),
             r"\input{preamble}",
             "",
-            *latex.title_block_lines(title, show_date=show_date),
+            *latex.title_block_lines(title, show_date=show_date, subtitle=subtitle),
             "",
             r"\begin{document}",
             *latex.title_page_lines(),
@@ -321,7 +339,67 @@ class LatexProjectBuilder:
     ) -> LatexConverter:
         if document_class is None:
             return self.latex
-        return LatexConverter(document_class=document_class)
+        return LatexConverter(
+            document_class=document_class,
+            output_options=self.output_options,
+        )
+
+    def _fold_beamer_title_sections(
+        self,
+        latex: LatexConverter,
+        sections: Sequence[LatexProjectSection],
+        cleaned_section_fragments: Sequence[Sequence[str]],
+    ) -> tuple[str | None, list[LatexProjectSection], list[Sequence[str]]]:
+        if not latex.document_class.is_beamer:
+            return None, list(sections), list(cleaned_section_fragments)
+
+        subtitles: list[str] = []
+        kept_sections: list[LatexProjectSection] = []
+        kept_fragments: list[Sequence[str]] = []
+        folding_leading_frontmatter = True
+        for section, fragments in zip(
+            sections,
+            cleaned_section_fragments,
+            strict=True,
+        ):
+            if (
+                folding_leading_frontmatter
+                and section.item.kind == StructureItemKind.frontmatter
+            ):
+                subtitle = self._beamer_title_only_subtitle(section, fragments)
+                if subtitle:
+                    subtitles.append(subtitle)
+                    continue
+            folding_leading_frontmatter = False
+            kept_sections.append(section)
+            kept_fragments.append(fragments)
+
+        subtitle = " / ".join(subtitles) if subtitles else None
+        return subtitle, kept_sections, kept_fragments
+
+    def _beamer_title_only_subtitle(
+        self,
+        section: LatexProjectSection,
+        fragments: Sequence[str],
+    ) -> str | None:
+        body = "\n\n".join(fragments).strip()
+        if not body:
+            return _normalize_title(section.item.title)
+
+        body_without_comments = "\n".join(
+            line
+            for line in body.splitlines()
+            if not line.lstrip().startswith("%")
+        ).strip()
+        body_without_heading = _LEADING_SECTION_RE.sub(
+            "",
+            body_without_comments,
+            count=1,
+        ).strip()
+        match = _TITLE_ONLY_FRAME_RE.fullmatch(body_without_heading)
+        if match:
+            return _normalize_title(match.group(1) or section.item.title)
+        return None
 
     def _input_path(self, path: PurePosixPath) -> str:
         return str(path.with_suffix(""))
@@ -331,3 +409,12 @@ class LatexProjectBuilder:
 
 
 _LEADING_SECTION_RE = re.compile(r"^\\section\*?\{([^{}\n]+)\}")
+_TITLE_ONLY_FRAME_RE = re.compile(
+    r"\\begin\{frame\}\s*\\frametitle\{([^{}\n]+)\}\s*\\end\{frame\}",
+    re.DOTALL,
+)
+
+
+def _normalize_title(title: str) -> str | None:
+    normalized = " ".join(title.split())
+    return normalized or None

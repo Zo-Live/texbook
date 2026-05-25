@@ -13,6 +13,7 @@ from ..document_class import (
     normalize_document_class_result,
 )
 from ..extract.base import PdfPageContext
+from ..output_options import LatexOutputOptions
 from ..structure import StructureEvidence
 from .config import LLMConfig
 from .prompts import (
@@ -104,6 +105,7 @@ class OpenAICompatibleClient:
         previous_latex_tail: str = "",
         extra_prompt: str = "",
         prompt_preset: PromptPreset | None = None,
+        output_options: LatexOutputOptions | None = None,
     ) -> LLMChunkResult:
         messages = build_chunk_messages(
             document_title=document_title,
@@ -114,6 +116,7 @@ class OpenAICompatibleClient:
             previous_latex_tail=previous_latex_tail,
             extra_prompt=extra_prompt,
             prompt_preset=prompt_preset,
+            output_options=output_options,
         )
         request_kwargs = {
             "model": self.config.model,

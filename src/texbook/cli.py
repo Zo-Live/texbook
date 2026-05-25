@@ -29,6 +29,7 @@ from .llm.presets import (
     save_prompt_preset,
 )
 from .llm.scheduler import LLMRateLimiter, LLMScheduler, ProgressEvent, RetryOptions
+from .output_options import BeamerBoxStyle, CtexFontProfile, LatexOutputOptions
 from .structure import StructureMode, StructurePlannerOptions
 
 
@@ -58,6 +59,20 @@ class DocumentClassOption(str, Enum):
     ctexart = "ctexart"
     ctexbook = "ctexbook"
     ctexbeamer = "ctexbeamer"
+
+
+class BeamerBoxStyleOption(str, Enum):
+    """Beamer emphasis box style for CLI options."""
+
+    block = "block"
+    tcolorbox = "tcolorbox"
+
+
+class CtexFontProfileOption(str, Enum):
+    """CTeX font profile for CLI options."""
+
+    default = "default"
+    local = "local"
 
 
 @dataclass(frozen=True)
@@ -324,6 +339,8 @@ def _build_converter(
     manual_title: Optional[str] = None,
     show_date: bool = False,
     document_class: DocumentClassOption | str = DocumentClassOption.auto,
+    beamer_box_style: BeamerBoxStyleOption | str = BeamerBoxStyleOption.block,
+    ctex_font_profile: CtexFontProfileOption | str = CtexFontProfileOption.default,
     structure: StructureOption | str = StructureOption.auto,
     structure_chunk_pages: int = 8,
     structure_max_pages: int = 32,
@@ -363,6 +380,20 @@ def _build_converter(
             max_pages=structure_max_pages,
         )
         document_class_mode = DocumentClassMode.from_value(resolved_document_class)
+        resolved_beamer_box_style = (
+            beamer_box_style.value
+            if isinstance(beamer_box_style, Enum)
+            else str(beamer_box_style)
+        )
+        resolved_ctex_font_profile = (
+            ctex_font_profile.value
+            if isinstance(ctex_font_profile, Enum)
+            else str(ctex_font_profile)
+        )
+        output_options = LatexOutputOptions(
+            beamer_box_style=BeamerBoxStyle(resolved_beamer_box_style),
+            ctex_font_profile=CtexFontProfile(resolved_ctex_font_profile),
+        )
 
         config = LLMConfig.from_values(
             model=model,
@@ -425,6 +456,7 @@ def _build_converter(
         structure_options=structure_options,
         scheduler=llm_scheduler,
         progress_reporter=progress_reporter,
+        output_options=output_options,
     )
 
 
@@ -694,6 +726,18 @@ def extract(
             "ctexart, ctexbook, or ctexbeamer"
         ),
     ),
+    beamer_box_style: BeamerBoxStyleOption = typer.Option(
+        BeamerBoxStyleOption.block,
+        "--beamer-box-style",
+        case_sensitive=False,
+        help="Beamer box style: block or tcolorbox",
+    ),
+    ctex_font_profile: CtexFontProfileOption = typer.Option(
+        CtexFontProfileOption.default,
+        "--ctex-font-profile",
+        case_sensitive=False,
+        help="CTeX font profile: default or local",
+    ),
     preset: str = typer.Option(
         DEFAULT_PROMPT_PRESET_NAME,
         "--preset",
@@ -828,6 +872,8 @@ def extract(
         manual_title=title,
         show_date=show_date,
         document_class=document_class,
+        beamer_box_style=beamer_box_style,
+        ctex_font_profile=ctex_font_profile,
         structure=structure,
         structure_chunk_pages=structure_chunk_pages,
         structure_max_pages=structure_max_pages,
@@ -935,6 +981,18 @@ def batch(
             "LaTeX document class: auto, article, book, beamer, "
             "ctexart, ctexbook, or ctexbeamer"
         ),
+    ),
+    beamer_box_style: BeamerBoxStyleOption = typer.Option(
+        BeamerBoxStyleOption.block,
+        "--beamer-box-style",
+        case_sensitive=False,
+        help="Beamer box style: block or tcolorbox",
+    ),
+    ctex_font_profile: CtexFontProfileOption = typer.Option(
+        CtexFontProfileOption.default,
+        "--ctex-font-profile",
+        case_sensitive=False,
+        help="CTeX font profile: default or local",
     ),
     preset: str = typer.Option(
         DEFAULT_PROMPT_PRESET_NAME,
@@ -1106,6 +1164,8 @@ def batch(
             title_source=title_source,
             show_date=show_date,
             document_class=document_class,
+            beamer_box_style=beamer_box_style,
+            ctex_font_profile=ctex_font_profile,
             structure=structure,
             structure_chunk_pages=structure_chunk_pages,
             structure_max_pages=structure_max_pages,

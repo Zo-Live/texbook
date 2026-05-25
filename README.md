@@ -81,6 +81,20 @@ uv run texbook extract "input/slides.pdf" --project -o "slides-project" \
   --document-class ctexbeamer
 ```
 
+Beamer 输出默认使用原生 `block`、`exampleblock` 和 `alertblock`。如果希望幻灯片强调块更接近使用 `tcolorbox` 的课件风格，可以显式开启：
+
+```bash
+uv run texbook extract "input/slides.pdf" --project -o "slides-project" \
+  --document-class ctexbeamer --beamer-box-style tcolorbox
+```
+
+CTeX 输出默认沿用 CTeX 自带字体配置。如果本机已安装中文字体，并希望避免默认 Fandol 字体在部分 XeLaTeX 环境中的 fontspec warning，可以使用本机字体配置：
+
+```bash
+uv run texbook extract "input/slides.pdf" --project -o "slides-project" \
+  --document-class ctexbeamer --ctex-font-profile local
+```
+
 项目模式默认启用大型教材结构规划（`--structure auto`）：如果 PDF 有有效书签，直接按书签生成章级文件；书签缺失或只有页码等无效内容时，会让 LLM 先读取开头少量页面判断是否包含目录，必要时继续读取下一段；仍无法确认目录时，再根据全书标题字号和页面开头文本推断章级结构。自动规划失败会回退到按 LLM chunk 生成章节文件，并在 notes 中提示。需要完全保留旧的 chunk-based 项目输出时，使用：
 
 ```bash
@@ -176,6 +190,8 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 - `--max-tokens`：LLM 响应最大 token 数，默认 `128000`。
 - `--temperature`：LLM 采样温度，默认 `1.0`；`extract` 和 `batch` 都支持。
 - `--document-class`：LaTeX 文档类，支持 `auto`、`article`、`book`、`beamer`、`ctexart`、`ctexbook`、`ctexbeamer`，默认 `auto`；`extract` 和 `batch`、单文件和项目模式都支持。
+- `--beamer-box-style`：Beamer 强调块样式，支持 `block`、`tcolorbox`，默认 `block`。
+- `--ctex-font-profile`：CTeX 字体配置，支持 `default`、`local`，默认 `default`；`local` 使用本机中文字体并生成 `fontset=none`。
 - `--project`：输出目录化 LaTeX 项目；`extract` 需要同时指定 `-o <dir>`，`batch` 会为每个 PDF 创建独立项目目录。
 - `--structure`：项目结构规划模式，支持 `auto`、`off`、`local`、`llm`，默认 `auto`，仅项目模式生效。
 - `--structure-chunk-pages`：结构规划阶段每次发送给 LLM 的开头页数，默认 `8`。

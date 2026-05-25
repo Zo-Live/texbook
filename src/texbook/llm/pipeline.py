@@ -19,6 +19,7 @@ from ..document_class import (
 from ..convert.latex_converter import LatexConverter
 from ..convert.project import LatexProjectBuilder, LatexProjectResult, LatexProjectSection
 from ..extract.base import ImageRenderOptions, PdfDocumentChunk, PdfPageContext
+from ..output_options import DEFAULT_OUTPUT_OPTIONS, LatexOutputOptions
 from ..extract.text_extractor import TextExtractor
 from ..structure import (
     StructureEvidence,
@@ -58,6 +59,7 @@ class LatexChunkClient(Protocol):
         previous_latex_tail: str = "",
         extra_prompt: str = "",
         prompt_preset: PromptPreset | None = None,
+        output_options: LatexOutputOptions | None = None,
     ) -> LLMChunkResult:
         """Generate LaTeX for one page chunk."""
 
@@ -147,6 +149,7 @@ class LLMPdfConverter:
         progress_interval: float = 0.1,
         scheduler: LLMScheduler | None = None,
         progress_reporter: ProgressReporter | None = None,
+        output_options: LatexOutputOptions | None = None,
     ):
         if chunk_pages <= 0:
             raise ValueError("chunk_pages must be positive.")
@@ -194,8 +197,9 @@ class LLMPdfConverter:
         self.progress_reporter = progress_reporter
         self.progress_spinner = _LlmWaitSpinner(progress_stream, progress_interval)
         self.scheduler = scheduler or LLMScheduler(reporter=progress_reporter)
-        self.document_builder = LatexConverter()
-        self.project_builder = LatexProjectBuilder()
+        self.output_options = output_options or DEFAULT_OUTPUT_OPTIONS
+        self.document_builder = LatexConverter(output_options=self.output_options)
+        self.project_builder = LatexProjectBuilder(output_options=self.output_options)
 
     def convert(
         self,
@@ -206,7 +210,8 @@ class LLMPdfConverter:
         collected = self._collect_conversion(pdf_path, pages=pages)
         return LLMConversionResult(
             latex=LatexConverter(
-                document_class=collected.document_class_result.document_class
+                document_class=collected.document_class_result.document_class,
+                output_options=self.output_options,
             ).convert_fragments(
                 title=collected.title,
                 fragments=collected.fragments,
@@ -308,6 +313,7 @@ class LLMPdfConverter:
                             prompt_preset=self.prompt_preset,
                             title_source=self.title_source,
                             document_class=document_class_result.document_class,
+                            output_options=self.output_options,
                         )
                 saw_chunk = True
                 try:
@@ -339,6 +345,7 @@ class LLMPdfConverter:
                                     previous_latex_tail=previous_latex_tail,
                                     extra_prompt=self.extra_prompt,
                                     prompt_preset=self.prompt_preset,
+                                    output_options=self.output_options,
                                 ),
                             )
                         if cache_run is not None:
@@ -454,6 +461,7 @@ class LLMPdfConverter:
                 title_source=self.title_source,
                 structure_plan=structure_plan,
                 document_class=document_class_result.document_class,
+                output_options=self.output_options,
             )
 
         total_chunks = sum(len(groups) for _, groups in chunk_groups)
@@ -494,6 +502,7 @@ class LLMPdfConverter:
                                     previous_latex_tail=previous_latex_tail,
                                     extra_prompt=self.extra_prompt,
                                     prompt_preset=self.prompt_preset,
+                                    output_options=self.output_options,
                                 ),
                             )
                         if cache_run is not None:

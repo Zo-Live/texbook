@@ -14,6 +14,7 @@ from texbook.extract.base import (
     PdfPageContext,
 )
 from texbook.document_class import DocumentClassMode, normalize_document_class_result
+from texbook.output_options import BeamerBoxStyle, LatexOutputOptions
 from texbook.structure import (
     BookmarkEntry,
     PageHeadingCandidate,
@@ -134,6 +135,7 @@ class FakeClient:
         previous_latex_tail="",
         extra_prompt="",
         prompt_preset=None,
+        output_options=None,
     ):
         self.calls.append(
             {
@@ -145,6 +147,7 @@ class FakeClient:
                 "previous_latex_tail": previous_latex_tail,
                 "extra_prompt": extra_prompt,
                 "prompt_preset": prompt_preset,
+                "output_options": output_options,
             }
         )
         latex = (
@@ -389,6 +392,7 @@ def _build_cache_run(
     max_tokens=128000,
     prompt_preset=None,
     title_source="filename",
+    output_options=None,
 ):
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_bytes(b"sample-pdf-bytes")
@@ -416,6 +420,7 @@ def _build_cache_run(
         extra_prompt=extra_prompt,
         prompt_preset=prompt_preset,
         title_source=title_source,
+        output_options=output_options,
     )
 
 
@@ -1769,6 +1774,12 @@ def test_chunk_cache_run_key_changes_with_inputs(tmp_path):
         prompt_preset=_custom_preset(suffix="\n自定义规则"),
     ).run_key
     assert base.run_key != _build_cache_run(tmp_path, title_source="llm").run_key
+    assert base.run_key != _build_cache_run(
+        tmp_path,
+        output_options=LatexOutputOptions(
+            beamer_box_style=BeamerBoxStyle.tcolorbox,
+        ),
+    ).run_key
     assert base.run_key != _build_cache_run(
         tmp_path,
         image_options=ImageRenderOptions(

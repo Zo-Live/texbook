@@ -12,6 +12,7 @@ from typing import Any, Sequence
 
 from ..document_class import DocumentClassResult, LatexDocumentClass
 from ..extract.base import ImageRenderOptions, PdfDocumentChunk, PdfPageContext
+from ..output_options import DEFAULT_OUTPUT_OPTIONS, LatexOutputOptions
 from ..structure import (
     StructureEvidence,
     StructurePlan,
@@ -24,7 +25,7 @@ from .presets import PromptPreset, default_prompt_preset
 
 
 CACHE_SCHEMA_VERSION = 1
-PROMPT_CACHE_VERSION = 4
+PROMPT_CACHE_VERSION = 5
 STRUCTURE_CACHE_VERSION = 1
 
 _HASH_CHUNK_SIZE = 1024 * 1024
@@ -64,6 +65,7 @@ class ChunkCacheRun:
         title_source: str = "filename",
         structure_plan: StructurePlan | None = None,
         document_class: LatexDocumentClass = LatexDocumentClass.ctexart,
+        output_options: LatexOutputOptions | None = None,
     ):
         self.options = options
         self.document_title = document_title
@@ -71,6 +73,7 @@ class ChunkCacheRun:
         self.title_source = title_source
         self.structure_plan = structure_plan
         self.document_class = document_class
+        self.output_options = output_options or DEFAULT_OUTPUT_OPTIONS
         self.run_key = _run_key(
             options=options,
             pdf_path=pdf_path,
@@ -84,6 +87,7 @@ class ChunkCacheRun:
             title_source=title_source,
             structure_plan=structure_plan,
             document_class=document_class,
+            output_options=self.output_options,
         )
         self.run_dir = options.cache_dir / self.run_key
         if options.clear:
@@ -144,6 +148,7 @@ class ChunkCacheRun:
             "document_title": self.document_title,
             "title_source": self.title_source,
             "document_class": self.document_class.value,
+            "output_options": self.output_options.to_metadata(),
             "structure_plan": plan_hash_payload(self.structure_plan),
             "prompt_preset_name": self.prompt_preset.name,
             "prompt_preset_version": self.prompt_preset.version,
@@ -201,6 +206,7 @@ class ChunkCacheRun:
             and data.get("document_title") == self.document_title
             and data.get("title_source") == self.title_source
             and data.get("document_class") == self.document_class.value
+            and data.get("output_options") == self.output_options.to_metadata()
             and data.get("structure_plan") == plan_hash_payload(self.structure_plan)
             and data.get("prompt_preset_name") == self.prompt_preset.name
             and data.get("prompt_preset_version") == self.prompt_preset.version
@@ -518,8 +524,10 @@ def _run_key(
     title_source: str = "filename",
     structure_plan: StructurePlan | None = None,
     document_class: LatexDocumentClass = LatexDocumentClass.ctexart,
+    output_options: LatexOutputOptions | None = None,
 ) -> str:
     resolved_prompt_preset = prompt_preset or default_prompt_preset()
+    resolved_output_options = output_options or DEFAULT_OUTPUT_OPTIONS
     payload = {
         "cache_schema_version": CACHE_SCHEMA_VERSION,
         "prompt_cache_version": PROMPT_CACHE_VERSION,
@@ -527,6 +535,7 @@ def _run_key(
         "document_title": document_title,
         "title_source": title_source,
         "document_class": document_class.value,
+        "output_options": resolved_output_options.to_metadata(),
         "structure_plan": plan_hash_payload(structure_plan),
         "pages": _normalize_pages(pages),
         "chunk_pages": chunk_pages,

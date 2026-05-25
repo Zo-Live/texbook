@@ -4,6 +4,11 @@ from typing import Any, Dict, List, Sequence
 
 from ..document_class import LatexDocumentClass
 from ..extract.base import PdfPageContext
+from ..output_options import (
+    BeamerBoxStyle,
+    DEFAULT_OUTPUT_OPTIONS,
+    LatexOutputOptions,
+)
 from ..structure import StructureEvidence
 from .presets import (
     PromptPreset,
@@ -23,9 +28,11 @@ def build_chunk_messages(
     previous_latex_tail: str = "",
     extra_prompt: str = "",
     prompt_preset: PromptPreset | None = None,
+    output_options: LatexOutputOptions | None = None,
 ) -> List[Dict[str, Any]]:
     """Build OpenAI-compatible chat messages for one PDF page chunk."""
     preset = prompt_preset or default_prompt_preset()
+    resolved_output_options = output_options or DEFAULT_OUTPUT_OPTIONS
     user_content: List[Dict[str, Any]] = [
         {
             "type": "text",
@@ -37,6 +44,7 @@ def build_chunk_messages(
                 total_chunks=total_chunks,
                 previous_latex_tail=previous_latex_tail,
                 prompt_preset=preset,
+                output_options=resolved_output_options,
             ),
         }
     ]
@@ -246,6 +254,7 @@ def _build_chunk_text(
     total_chunks: int,
     previous_latex_tail: str,
     prompt_preset: PromptPreset,
+    output_options: LatexOutputOptions,
 ) -> str:
     previous_latex_tail_section = ""
     if previous_latex_tail:
@@ -257,7 +266,10 @@ def _build_chunk_text(
     return prompt_preset.chunk_user_template.format(
         document_title=document_title,
         document_class=document_class.value,
-        document_class_instruction=_document_class_instruction(document_class),
+        document_class_instruction=_document_class_instruction(
+            document_class,
+            output_options=output_options,
+        ),
         chunk_index=chunk_index,
         total_chunks=total_chunks,
         previous_latex_tail_section=previous_latex_tail_section,
@@ -283,12 +295,33 @@ def _build_document_class_text(
     return "\n".join(lines)
 
 
-def _document_class_instruction(document_class: LatexDocumentClass) -> str:
+def _document_class_instruction(
+    document_class: LatexDocumentClass,
+    *,
+    output_options: LatexOutputOptions | None = None,
+) -> str:
+    resolved_output_options = output_options or DEFAULT_OUTPUT_OPTIONS
     if document_class.is_beamer:
+        if resolved_output_options.beamer_box_style == BeamerBoxStyle.tcolorbox:
+            box_instruction = (
+                "强调块必须使用项目 preamble 已预定义的 texbookinfobox、"
+                "texbookexamplebox、texbookalertbox、texbookplainbox 环境；"
+                "不要自行定义 tcolorbox 样式，不要输出 \\usepackage。"
+            )
+        else:
+            box_instruction = (
+                "强调块使用 Beamer 原生 block、exampleblock、alertblock 环境；"
+                "不要输出 tcolorbox 环境。"
+            )
         return (
             "目标文档类是 Beamer。正文片段应保留幻灯片边界，使用 frame、"
-            "\\frametitle、block、exampleblock 等 Beamer 可编译结构；"
-            "长页内容应拆成多个 frame 或使用 [allowframebreaks]，避免单页溢出。"
+            "\\frametitle 以及可编译的强调块结构。"
+            "纯封面、章标题或节标题页不要生成独立空 frame，应作为标题页信息处理；"
+            "包含条目列表的目录或提纲页保留为单独 frame。"
+            "长证明、长例题、长列表必须按语义拆成多个 frame，例如命题一页、"
+            "各小问证明分别分页、逆映射公式单独分页；不要只依赖单个 "
+            "[allowframebreaks]。"
+            f"{box_instruction}"
         )
     if document_class.is_book:
         return (

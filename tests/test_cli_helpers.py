@@ -10,7 +10,15 @@ from typer.testing import CliRunner
 
 from texbook import cli as cli_module
 from texbook.convert import LatexProjectResult
-from texbook.cli import DocumentClassOption, TitleSource, _build_converter, _parse_pages, app
+from texbook.cli import (
+    BeamerBoxStyleOption,
+    CtexFontProfileOption,
+    DocumentClassOption,
+    TitleSource,
+    _build_converter,
+    _parse_pages,
+    app,
+)
 from texbook.extract.base import DocumentExtractionError
 from texbook.llm.presets import PromptPreset, default_prompt_preset
 
@@ -141,6 +149,26 @@ def test_build_converter_passes_document_class_option(tmp_path):
     )
 
     assert converter.document_class_mode.value == "ctexbeamer"
+
+
+def test_build_converter_passes_latex_output_options(tmp_path):
+    converter = _build_converter(
+        model="test-model",
+        api_key="test-key",
+        base_url=None,
+        temperature=1.0,
+        timeout=10.0,
+        max_tokens=128,
+        chunk_pages=2,
+        image_dpi=144,
+        cache_dir=tmp_path / "cache",
+        beamer_box_style=BeamerBoxStyleOption.tcolorbox,
+        ctex_font_profile=CtexFontProfileOption.local,
+        client=DummyClient(),
+    )
+
+    assert converter.output_options.beamer_box_style.value == "tcolorbox"
+    assert converter.output_options.ctex_font_profile.value == "local"
 
 
 def test_build_converter_accepts_prompt_preset_object(tmp_path):
