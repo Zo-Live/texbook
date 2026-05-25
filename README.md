@@ -179,6 +179,28 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 
 仓库本地预设保存在 `config/texbook/presets/<name>.json`。名称需匹配 `[a-z0-9][a-z0-9_-]{1,63}`，且不能覆盖内置预设。
 
+## Windows GUI
+
+当前主分支包含 Windows GUI 骨架，使用 PySide6/Qt6。启动桌面应用：
+
+```bash
+uv run texbook-gui
+```
+
+也可以使用模块入口：
+
+```bash
+uv run python -m texbook.gui
+```
+
+GUI 使用 `docs/icon.ico` 作为应用图标。基础 Windows 打包入口使用 PyInstaller：
+
+```bash
+uv run pyinstaller packaging/texbook-gui.spec
+```
+
+GUI 只负责桌面交互与转换结果展示，不负责 LaTeX 编译，也不会携带本仓库 `.latexmkrc`、`src/.latexmkrc` 或 `scripts/post-build.sh`。
+
 ## 常用参数
 
 - `--pages`：页码选择，例如 `1,3-6`，页码从 1 开始。
@@ -235,7 +257,12 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 │     ├─ cli.py                   # 命令行入口
 │     ├─ convert/                 # LaTeX 文档外壳组装与输出
 │     ├─ extract/                 # PDF 文本、位置、字号与图像提取
+│     ├─ gui/                     # PySide6 Windows GUI 入口与窗口骨架
 │     └─ llm/                     # LLM 客户端、缓存、流水线和 Prompt
+├─ docs/
+│  └─ icon.ico                    # GUI 应用图标
+├─ packaging/
+│  └─ texbook-gui.spec            # PyInstaller 打包入口
 └─ tests/                         # 单元测试
 ```
 
@@ -252,6 +279,7 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 uv sync --group dev
 uv run pytest
 uv run ruff check
+uv run pyinstaller packaging/texbook-gui.spec
 ```
 
 阶段验收需要真实转换时，优先使用少量页 PDF，避免误处理完整教材：
