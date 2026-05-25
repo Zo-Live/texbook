@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QAction, QIcon
-from PySide6.QtWidgets import QMainWindow, QWidget
+from PySide6.QtWidgets import QMainWindow
 
+from texbook.gui.main_panel import ConversionMainPanel
 from texbook.gui.resources import APP_DISPLAY_NAME, APP_WINDOW_TITLE, resolve_app_icon_path
+from texbook.gui.theme import build_fluent_stylesheet
 
 
 class MainWindow(QMainWindow):
@@ -22,9 +24,10 @@ class MainWindow(QMainWindow):
         if icon_path is not None:
             self.setWindowIcon(QIcon(str(icon_path)))
 
+        self.setStyleSheet(build_fluent_stylesheet())
         self._setup_menu_bar()
         self._setup_status_bar()
-        self.setCentralWidget(self._create_empty_central_widget())
+        self.setCentralWidget(ConversionMainPanel(self))
 
     def _setup_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("文件")
@@ -39,8 +42,3 @@ class MainWindow(QMainWindow):
 
     def _setup_status_bar(self) -> None:
         self.statusBar().showMessage("就绪")
-
-    def _create_empty_central_widget(self) -> QWidget:
-        container = QWidget(self)
-        container.setObjectName("emptyCentralWidget")
-        return container
