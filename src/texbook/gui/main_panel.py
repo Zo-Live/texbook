@@ -35,6 +35,11 @@ from texbook.gui.selection import (
     GuiPathSelectionState,
     input_kind_from_label,
 )
+from texbook.gui.settings import (
+    GuiConversionMode,
+    GuiConversionSettings,
+    validate_gui_settings,
+)
 from texbook.gui.widgets import InlineField, MetricPill, OptionGrid, SectionPanel
 
 
@@ -130,6 +135,7 @@ class ConversionMainPanel(QWidget):
         parameters_layout.setContentsMargins(0, 0, 0, 0)
         parameters_layout.setSpacing(12)
         parameters_layout.addWidget(self._create_page_document_panel())
+        parameters_layout.addWidget(self._create_document_panel())
         parameters_layout.addWidget(self._create_model_panel())
         parameters_layout.addWidget(self._create_cache_panel())
         parameters_layout.addWidget(self._create_advanced_panel())
@@ -185,6 +191,7 @@ class ConversionMainPanel(QWidget):
         overwrite = QCheckBox("覆盖前确认", panel)
         overwrite.setObjectName("confirmOverwriteCheckBox")
         overwrite.setChecked(True)
+        self.confirm_overwrite_checkbox = overwrite
         grid.add_row("写盘策略", overwrite)
 
         panel.body_layout.addWidget(grid)
@@ -197,15 +204,16 @@ class ConversionMainPanel(QWidget):
         layout.setSpacing(16)
 
         self._mode_group = QButtonGroup(panel)
-        for index, (name, text) in enumerate(
+        for index, (name, text, mode) in enumerate(
             [
-                ("singleFileModeRadio", "单文件 .tex"),
-                ("projectModeRadio", "目录化项目"),
-                ("batchModeRadio", "批量任务"),
+                ("singleFileModeRadio", "单文件 .tex", GuiConversionMode.single_file),
+                ("projectModeRadio", "目录化项目", GuiConversionMode.project),
+                ("batchModeRadio", "批量任务", GuiConversionMode.batch),
             ]
         ):
             radio = QRadioButton(text, panel)
             radio.setObjectName(name)
+            radio.setProperty("conversionMode", mode.value)
             radio.setChecked(index == 0)
             self._mode_group.addButton(radio, index)
             layout.addWidget(radio)
@@ -215,34 +223,66 @@ class ConversionMainPanel(QWidget):
         return panel
 
     def _create_page_document_panel(self) -> SectionPanel:
-        panel = SectionPanel("页面与文档类", object_name="documentOptionsPanel", parent=self)
+        panel = SectionPanel("页面范围", object_name="pageOptionsPanel", parent=self)
         grid = OptionGrid(parent=panel)
 
         pages = QLineEdit(panel)
         pages.setObjectName("pagesField")
         pages.setPlaceholderText("全部页面")
+        self.pages_field = pages
         grid.add_row("页面范围", pages)
+
+        manual_title = QLineEdit(panel)
+        manual_title.setObjectName("manualTitleField")
+        manual_title.setPlaceholderText("默认使用 PDF 文件名")
+        self.manual_title_field = manual_title
+        grid.add_row("手动标题", manual_title)
+
+        title_source = QComboBox(panel)
+        title_source.setObjectName("titleSourceCombo")
+        title_source.addItems(["filename", "llm"])
+        self.title_source_combo = title_source
+        grid.add_row("标题来源", title_source)
+
+        show_date = QCheckBox("显示日期", panel)
+        show_date.setObjectName("showDateCheckBox")
+        self.show_date_checkbox = show_date
+        grid.add_row("日期", show_date)
+
+        panel.body_layout.addWidget(grid)
+        return panel
+
+    def _create_document_panel(self) -> SectionPanel:
+        panel = SectionPanel("文档类", object_name="documentOptionsPanel", parent=self)
+        grid = OptionGrid(parent=panel)
 
         document_class = QComboBox(panel)
         document_class.setObjectName("documentClassCombo")
         document_class.addItems(
             ["auto", "ctexart", "ctexbook", "ctexbeamer", "article", "book", "beamer"]
         )
+        self.document_class_combo = document_class
         grid.add_row("文档类", document_class)
 
         structure = QComboBox(panel)
         structure.setObjectName("structureModeCombo")
         structure.addItems(["auto", "off", "local", "llm"])
+        self.structure_mode_combo = structure
         grid.add_row("结构规划", structure)
+
+        structure_chunk_pages = self._make_spin_box("structureChunkPagesSpinBox", 1, 128, 8)
+        self.structure_chunk_pages_spin_box = structure_chunk_pages
+        grid.add_row("规划 Chunk 页数", structure_chunk_pages)
+
+        structure_max_pages = self._make_spin_box("structureMaxPagesSpinBox", 1, 4096, 32)
+        self.structure_max_pages_spin_box = structure_max_pages
+        grid.add_row("规划最大页数", structure_max_pages)
 
         title_page = QCheckBox("生成 Beamer 标题页", panel)
         title_page.setObjectName("beamerTitlePageCheckBox")
         title_page.setChecked(True)
+        self.beamer_title_page_checkbox = title_page
         grid.add_row("标题页", title_page)
-
-        show_date = QCheckBox("显示日期", panel)
-        show_date.setObjectName("showDateCheckBox")
-        grid.add_row("日期", show_date)
 
         panel.body_layout.addWidget(grid)
         return panel
@@ -254,32 +294,33 @@ class ConversionMainPanel(QWidget):
         model = QLineEdit(panel)
         model.setObjectName("modelField")
         model.setPlaceholderText("TEXBOOK_MODEL")
+        self.model_field = model
         grid.add_row("模型", model)
 
         base_url = QLineEdit(panel)
         base_url.setObjectName("baseUrlField")
         base_url.setPlaceholderText("TEXBOOK_BASE_URL")
+        self.base_url_field = base_url
         grid.add_row("Base URL", base_url)
 
         api_key = QLineEdit(panel)
         api_key.setObjectName("apiKeyField")
         api_key.setEchoMode(QLineEdit.EchoMode.Password)
         api_key.setPlaceholderText("TEXBOOK_API_KEY")
+        self.api_key_field = api_key
         grid.add_row("API Key", api_key)
-
-        title_source = QComboBox(panel)
-        title_source.setObjectName("titleSourceCombo")
-        title_source.addItems(["filename", "llm"])
-        grid.add_row("标题来源", title_source)
 
         preset = QComboBox(panel)
         preset.setObjectName("promptPresetCombo")
+        preset.setEditable(True)
         preset.addItem("chinese-math")
+        self.prompt_preset_combo = preset
         grid.add_row("Prompt 预设", preset)
 
         extra_prompt = QTextEdit(panel)
         extra_prompt.setObjectName("extraPromptEdit")
         extra_prompt.setPlaceholderText("追加一次性转换要求")
+        self.extra_prompt_edit = extra_prompt
         grid.add_row("额外要求", extra_prompt)
 
         panel.body_layout.addWidget(grid)
@@ -292,29 +333,51 @@ class ConversionMainPanel(QWidget):
         cache_enabled = QCheckBox("启用缓存", panel)
         cache_enabled.setObjectName("cacheEnabledCheckBox")
         cache_enabled.setChecked(True)
+        self.cache_enabled_checkbox = cache_enabled
         grid.add_row("缓存", cache_enabled)
 
         cache_dir = QLineEdit(panel)
         cache_dir.setObjectName("cacheDirectoryField")
         cache_dir.setPlaceholderText("build/.texbook_cache")
+        cache_dir.setText("build/.texbook_cache")
+        self.cache_directory_field = cache_dir
         browse = self._make_icon_button(
             "cacheBrowseButton",
             QStyle.StandardPixmap.SP_DirOpenIcon,
             "浏览缓存目录",
         )
-        browse.setEnabled(False)
+        self.cache_browse_button = browse
         grid.add_row("缓存目录", InlineField(cache_dir, browse, parent=panel))
 
+        clear_cache = QCheckBox("转换前清理匹配缓存", panel)
+        clear_cache.setObjectName("clearCacheCheckBox")
+        self.clear_cache_checkbox = clear_cache
+        grid.add_row("清理缓存", clear_cache)
+
         chunk_pages = self._make_spin_box("chunkPagesSpinBox", 1, 64, 4)
+        self.chunk_pages_spin_box = chunk_pages
         grid.add_row("Chunk 页数", chunk_pages)
 
         prefetch = self._make_spin_box("prefetchChunksSpinBox", 0, 16, 1)
+        self.prefetch_chunks_spin_box = prefetch
         grid.add_row("预渲染", prefetch)
 
         llm_concurrency = self._make_spin_box("llmConcurrencySpinBox", 1, 16, 1)
+        self.llm_concurrency_spin_box = llm_concurrency
         grid.add_row("LLM 并发", llm_concurrency)
 
+        llm_interval = QDoubleSpinBox(panel)
+        llm_interval.setObjectName("llmIntervalSpinBox")
+        llm_interval.setRange(0.0, 600.0)
+        llm_interval.setDecimals(1)
+        llm_interval.setSingleStep(0.5)
+        llm_interval.setValue(0.0)
+        llm_interval.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.llm_min_request_interval_spin_box = llm_interval
+        grid.add_row("请求间隔", llm_interval)
+
         batch_workers = self._make_spin_box("batchWorkersSpinBox", 1, 16, 1)
+        self.batch_workers_spin_box = batch_workers
         grid.add_row("批量 Worker", batch_workers)
 
         panel.body_layout.addWidget(grid)
@@ -325,24 +388,63 @@ class ConversionMainPanel(QWidget):
         grid = OptionGrid(parent=panel)
 
         image_dpi = self._make_spin_box("imageDpiSpinBox", 72, 600, 160)
+        self.image_dpi_spin_box = image_dpi
         grid.add_row("图像 DPI", image_dpi)
+
+        image_dpi_min = self._make_spin_box("imageDpiMinSpinBox", 1, 600, 100)
+        self.image_dpi_min_spin_box = image_dpi_min
+        grid.add_row("图像 DPI 下限", image_dpi_min)
+
+        image_dpi_max = self._make_spin_box("imageDpiMaxSpinBox", 0, 600, 0)
+        image_dpi_max.setSpecialValueText("默认 DPI")
+        self.image_dpi_max_spin_box = image_dpi_max
+        grid.add_row("图像 DPI 上限", image_dpi_max)
 
         image_format = QComboBox(panel)
         image_format.setObjectName("imageFormatCombo")
         image_format.addItems(["auto", "png", "jpeg"])
+        image_format.setCurrentText("png")
+        self.image_format_combo = image_format
         grid.add_row("图像格式", image_format)
 
+        jpeg_quality = self._make_spin_box("jpegQualitySpinBox", 1, 100, 85)
+        self.jpeg_quality_spin_box = jpeg_quality
+        grid.add_row("JPEG 质量", jpeg_quality)
+
         retries = self._make_spin_box("llmRetriesSpinBox", 0, 10, 2)
+        self.llm_retries_spin_box = retries
         grid.add_row("重试次数", retries)
 
-        interval = QDoubleSpinBox(panel)
-        interval.setObjectName("llmIntervalSpinBox")
-        interval.setRange(0.0, 600.0)
-        interval.setDecimals(1)
-        interval.setSingleStep(0.5)
-        interval.setValue(0.0)
-        interval.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
-        grid.add_row("请求间隔", interval)
+        retry_initial_delay = QDoubleSpinBox(panel)
+        retry_initial_delay.setObjectName("llmRetryInitialDelaySpinBox")
+        retry_initial_delay.setRange(0.0, 600.0)
+        retry_initial_delay.setDecimals(1)
+        retry_initial_delay.setSingleStep(0.5)
+        retry_initial_delay.setValue(2.0)
+        retry_initial_delay.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.llm_retry_initial_delay_spin_box = retry_initial_delay
+        grid.add_row("初始重试延迟", retry_initial_delay)
+
+        retry_max_delay = QDoubleSpinBox(panel)
+        retry_max_delay.setObjectName("llmRetryMaxDelaySpinBox")
+        retry_max_delay.setRange(0.0, 600.0)
+        retry_max_delay.setDecimals(1)
+        retry_max_delay.setSingleStep(0.5)
+        retry_max_delay.setValue(30.0)
+        retry_max_delay.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.llm_retry_max_delay_spin_box = retry_max_delay
+        grid.add_row("最大重试延迟", retry_max_delay)
+
+        timeout = QDoubleSpinBox(panel)
+        timeout.setObjectName("timeoutSpinBox")
+        timeout.setRange(0.0, 6000.0)
+        timeout.setDecimals(1)
+        timeout.setSingleStep(1.0)
+        timeout.setValue(0.0)
+        timeout.setSpecialValueText("不限制")
+        timeout.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.timeout_spin_box = timeout
+        grid.add_row("LLM 超时", timeout)
 
         temperature = QDoubleSpinBox(panel)
         temperature.setObjectName("temperatureSpinBox")
@@ -350,19 +452,23 @@ class ConversionMainPanel(QWidget):
         temperature.setDecimals(2)
         temperature.setSingleStep(0.05)
         temperature.setValue(1.0)
+        self.temperature_spin_box = temperature
         grid.add_row("Temperature", temperature)
 
         max_tokens = self._make_spin_box("maxTokensSpinBox", 1, 512000, 128000)
+        self.max_tokens_spin_box = max_tokens
         grid.add_row("Max tokens", max_tokens)
 
         beamer_style = QComboBox(panel)
         beamer_style.setObjectName("beamerBoxStyleCombo")
         beamer_style.addItems(["block", "tcolorbox"])
+        self.beamer_box_style_combo = beamer_style
         grid.add_row("Beamer 块", beamer_style)
 
         ctex_font = QComboBox(panel)
         ctex_font.setObjectName("ctexFontProfileCombo")
         ctex_font.addItems(["default", "local"])
+        self.ctex_font_profile_combo = ctex_font
         grid.add_row("CTeX 字体", ctex_font)
 
         panel.body_layout.addWidget(grid)
@@ -462,7 +568,49 @@ class ConversionMainPanel(QWidget):
     def _connect_selection_controls(self) -> None:
         self.pdf_input_browse_button.clicked.connect(self._browse_pdf_input)
         self.output_browse_button.clicked.connect(self._browse_output_directory)
+        self.cache_browse_button.clicked.connect(self._browse_cache_directory)
         self.input_type_combo.currentTextChanged.connect(self._change_input_kind)
+        self._mode_group.idClicked.connect(self._sync_mode_from_radio)
+        self.title_source_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.structure_mode_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.document_class_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.cache_enabled_checkbox.toggled.connect(self._sync_cache_controls)
+        self.image_format_combo.currentTextChanged.connect(self._sync_image_controls)
+        self.cache_directory_field.textChanged.connect(self._sync_gui_state)
+        self.pages_field.textChanged.connect(self._sync_gui_state)
+        self.manual_title_field.textChanged.connect(self._sync_gui_state)
+        self.model_field.textChanged.connect(self._sync_gui_state)
+        self.base_url_field.textChanged.connect(self._sync_gui_state)
+        self.api_key_field.textChanged.connect(self._sync_gui_state)
+        self.prompt_preset_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.extra_prompt_edit.textChanged.connect(self._sync_gui_state)
+        self.confirm_overwrite_checkbox.toggled.connect(self._sync_gui_state)
+        self.show_date_checkbox.toggled.connect(self._sync_gui_state)
+        self.beamer_title_page_checkbox.toggled.connect(self._sync_gui_state)
+        self.clear_cache_checkbox.toggled.connect(self._sync_gui_state)
+        self.chunk_pages_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.prefetch_chunks_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.llm_concurrency_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.llm_min_request_interval_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.batch_workers_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.structure_chunk_pages_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.structure_max_pages_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.image_dpi_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.image_dpi_min_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.image_dpi_max_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.jpeg_quality_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.llm_retries_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.llm_retry_initial_delay_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.llm_retry_max_delay_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.timeout_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.temperature_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.max_tokens_spin_box.valueChanged.connect(self._sync_gui_state)
+        self.beamer_box_style_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.ctex_font_profile_combo.currentTextChanged.connect(self._sync_gui_state)
+
+        self._sync_image_controls()
+        self._sync_cache_controls()
+        self._sync_gui_state()
 
     def _browse_pdf_input(self) -> None:
         kind = self._current_input_kind()
@@ -497,6 +645,11 @@ class ConversionMainPanel(QWidget):
         if directory:
             self.set_output_directory(directory)
 
+    def _browse_cache_directory(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "选择缓存目录", "")
+        if directory:
+            self.cache_directory_field.setText(directory)
+
     def _change_input_kind(self, _text: str) -> None:
         self.set_input_selection(GuiInputSelection.empty(self._current_input_kind()))
 
@@ -519,12 +672,16 @@ class ConversionMainPanel(QWidget):
     def _refresh_path_state(self) -> None:
         self.pdf_input_field.setText(self.selection_state.input_selection.display_text())
         self.output_directory_field.setText(self.selection_state.output_directory)
-        self.add_task_button.setEnabled(self.selection_state.can_add_task)
-        self._publish_status_message(self._path_status_message())
+        self._refresh_mode_controls()
+        self._refresh_action_state()
+        self._publish_status_message(self._status_message())
 
-    def _path_status_message(self) -> str:
+    def _status_message(self) -> str:
         has_input = self.selection_state.input_selection.is_valid
         has_output = bool(self.selection_state.output_directory)
+        errors = validate_gui_settings(self.current_settings())
+        if errors:
+            return errors[0]
         if has_input and has_output:
             return "已选择 PDF 输入和产物目录"
         if has_input:
@@ -541,3 +698,156 @@ class ConversionMainPanel(QWidget):
 
     def _current_input_kind(self) -> GuiInputKind:
         return input_kind_from_label(self.input_type_combo.currentText())
+
+    def _current_conversion_mode(self) -> GuiConversionMode:
+        button = self._mode_group.checkedButton()
+        if button is None:
+            return GuiConversionMode.single_file
+        return GuiConversionMode(button.property("conversionMode"))
+
+    def _sync_mode_from_radio(self, button_id: int) -> None:
+        button = self._mode_group.button(button_id)
+        if button is None:
+            return
+        mode = GuiConversionMode(button.property("conversionMode"))
+        self._set_conversion_mode(mode)
+
+    def _set_conversion_mode(self, mode: GuiConversionMode) -> None:
+        for button in self._mode_group.buttons():
+            if button.property("conversionMode") == mode.value:
+                button.setChecked(True)
+                break
+        self._sync_gui_state()
+
+    def _refresh_mode_controls(self) -> None:
+        if self._current_conversion_mode() == GuiConversionMode.batch:
+            self.batch_workers_spin_box.setEnabled(True)
+        else:
+            self.batch_workers_spin_box.setEnabled(False)
+
+        project_mode = self._current_conversion_mode() == GuiConversionMode.project
+        self.structure_mode_combo.setEnabled(project_mode)
+        self.structure_chunk_pages_spin_box.setEnabled(project_mode)
+        self.structure_max_pages_spin_box.setEnabled(project_mode)
+
+    def _sync_cache_controls(self) -> None:
+        enabled = self.cache_enabled_checkbox.isChecked()
+        self.cache_directory_field.setEnabled(enabled)
+        self.cache_browse_button.setEnabled(enabled)
+        if not enabled:
+            self.clear_cache_checkbox.setChecked(False)
+        self.clear_cache_checkbox.setEnabled(enabled)
+        self._sync_gui_state()
+
+    def _sync_image_controls(self) -> None:
+        is_jpeg = self.image_format_combo.currentText() == "jpeg"
+        self.jpeg_quality_spin_box.setEnabled(is_jpeg or self.image_format_combo.currentText() == "auto")
+        self._sync_gui_state()
+
+    def _sync_gui_state(self) -> None:
+        self._refresh_action_state()
+        self._publish_status_message(self._status_message())
+
+    def _refresh_action_state(self) -> None:
+        settings = self.current_settings()
+        self.add_task_button.setEnabled(self.selection_state.can_add_task and not validate_gui_settings(settings))
+        self.manual_title_field.setEnabled(self.title_source_combo.currentText() != "llm")
+        self.show_date_checkbox.setEnabled(True)
+        self.beamer_title_page_checkbox.setEnabled(self.document_class_combo.currentText() in {"beamer", "ctexbeamer"})
+
+        project_mode = self._current_conversion_mode() == GuiConversionMode.project
+        self.structure_mode_combo.setEnabled(project_mode)
+        self.structure_chunk_pages_spin_box.setEnabled(project_mode)
+        self.structure_max_pages_spin_box.setEnabled(project_mode)
+        self.batch_workers_spin_box.setEnabled(self._current_conversion_mode() == GuiConversionMode.batch)
+
+    def current_settings(self) -> GuiConversionSettings:
+        return GuiConversionSettings(
+            path_state=self.selection_state,
+            conversion_mode=self._current_conversion_mode(),
+            confirm_overwrite=self.confirm_overwrite_checkbox.isChecked(),
+            pages=self.pages_field.text(),
+            document_class=self.document_class_combo.currentText(),
+            structure_mode=self.structure_mode_combo.currentText(),
+            structure_chunk_pages=self.structure_chunk_pages_spin_box.value(),
+            structure_max_pages=self.structure_max_pages_spin_box.value(),
+            manual_title=self.manual_title_field.text(),
+            title_source=self.title_source_combo.currentText(),
+            show_date=self.show_date_checkbox.isChecked(),
+            beamer_title_page=self.beamer_title_page_checkbox.isChecked(),
+            model=self.model_field.text(),
+            base_url=self.base_url_field.text(),
+            api_key=self.api_key_field.text(),
+            prompt_preset=self.prompt_preset_combo.currentText(),
+            extra_prompt=self.extra_prompt_edit.toPlainText(),
+            temperature=self.temperature_spin_box.value(),
+            timeout_seconds=None if self.timeout_spin_box.value() == 0 else self.timeout_spin_box.value(),
+            max_tokens=self.max_tokens_spin_box.value(),
+            cache_enabled=self.cache_enabled_checkbox.isChecked(),
+            cache_directory=self.cache_directory_field.text(),
+            clear_cache=self.clear_cache_checkbox.isChecked(),
+            chunk_pages=self.chunk_pages_spin_box.value(),
+            prefetch_chunks=self.prefetch_chunks_spin_box.value(),
+            llm_max_concurrency=self.llm_concurrency_spin_box.value(),
+            llm_min_request_interval=self.llm_min_request_interval_spin_box.value(),
+            batch_workers=self.batch_workers_spin_box.value(),
+            image_dpi=self.image_dpi_spin_box.value(),
+            image_dpi_min=self.image_dpi_min_spin_box.value(),
+            image_dpi_max=None if self.image_dpi_max_spin_box.value() == 0 else self.image_dpi_max_spin_box.value(),
+            image_format=self.image_format_combo.currentText(),
+            jpeg_quality=self.jpeg_quality_spin_box.value(),
+            llm_retries=self.llm_retries_spin_box.value(),
+            llm_retry_initial_delay=self.llm_retry_initial_delay_spin_box.value(),
+            llm_retry_max_delay=self.llm_retry_max_delay_spin_box.value(),
+            beamer_box_style=self.beamer_box_style_combo.currentText(),
+            ctex_font_profile=self.ctex_font_profile_combo.currentText(),
+        )
+
+    def set_settings(self, settings: GuiConversionSettings) -> None:
+        self.selection_state = settings.path_state
+        self.confirm_overwrite_checkbox.setChecked(settings.confirm_overwrite)
+        self.pages_field.setText(settings.pages)
+        self.document_class_combo.setCurrentText(settings.document_class)
+        self.structure_mode_combo.setCurrentText(settings.structure_mode)
+        self.structure_chunk_pages_spin_box.setValue(settings.structure_chunk_pages)
+        self.structure_max_pages_spin_box.setValue(settings.structure_max_pages)
+        self.manual_title_field.setText(settings.manual_title)
+        self.title_source_combo.setCurrentText(settings.title_source)
+        self.show_date_checkbox.setChecked(settings.show_date)
+        self.beamer_title_page_checkbox.setChecked(settings.beamer_title_page)
+        self.model_field.setText(settings.model)
+        self.base_url_field.setText(settings.base_url)
+        self.api_key_field.setText(settings.api_key)
+        self.prompt_preset_combo.setCurrentText(settings.prompt_preset)
+        self.extra_prompt_edit.setPlainText(settings.extra_prompt)
+        self.temperature_spin_box.setValue(settings.temperature)
+        self.timeout_spin_box.setValue(0.0 if settings.timeout_seconds is None else settings.timeout_seconds)
+        self.max_tokens_spin_box.setValue(settings.max_tokens)
+        self.cache_enabled_checkbox.setChecked(settings.cache_enabled)
+        self.cache_directory_field.setText(settings.cache_directory)
+        self.clear_cache_checkbox.setChecked(settings.clear_cache)
+        self.chunk_pages_spin_box.setValue(settings.chunk_pages)
+        self.prefetch_chunks_spin_box.setValue(settings.prefetch_chunks)
+        self.llm_concurrency_spin_box.setValue(settings.llm_max_concurrency)
+        self.llm_min_request_interval_spin_box.setValue(settings.llm_min_request_interval)
+        self.batch_workers_spin_box.setValue(settings.batch_workers)
+        self.image_dpi_spin_box.setValue(settings.image_dpi)
+        self.image_dpi_min_spin_box.setValue(settings.image_dpi_min)
+        self.image_dpi_max_spin_box.setValue(0 if settings.image_dpi_max is None else settings.image_dpi_max)
+        self.image_format_combo.setCurrentText(settings.image_format)
+        self.jpeg_quality_spin_box.setValue(settings.jpeg_quality)
+        self.llm_retries_spin_box.setValue(settings.llm_retries)
+        self.llm_retry_initial_delay_spin_box.setValue(settings.llm_retry_initial_delay)
+        self.llm_retry_max_delay_spin_box.setValue(settings.llm_retry_max_delay)
+        self.beamer_box_style_combo.setCurrentText(settings.beamer_box_style)
+        self.ctex_font_profile_combo.setCurrentText(settings.ctex_font_profile)
+        self._sync_cache_controls()
+        self._sync_image_controls()
+        self._set_conversion_mode(settings.conversion_mode)
+        self._refresh_path_state()
+
+    def reset_settings(self) -> None:
+        self.set_settings(GuiConversionSettings())
+
+    def validate_settings(self) -> list[str]:
+        return validate_gui_settings(self.current_settings())
