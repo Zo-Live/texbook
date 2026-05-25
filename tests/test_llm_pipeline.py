@@ -26,7 +26,6 @@ from texbook.llm.client import LLMStructurePlanResult
 from texbook.llm.cache import ChunkCacheOptions, ChunkCacheRun
 from texbook.llm.pipeline import (
     LLMPdfConverter,
-    _LlmWaitSpinner,
     _append_tail,
     _iter_prefetched_chunks,
     _tail,
@@ -908,7 +907,7 @@ def test_pipeline_can_show_today_date():
     assert r"\date{\today}" in result.latex
 
 
-def test_pipeline_shows_spinner_for_uncached_llm_chunk():
+def test_pipeline_does_not_write_to_progress_stream_for_uncached_llm_chunk():
     stream = FakeTtyStream()
     pages = [PdfPageContext(page_number=1, width=1, height=1)]
     extractor = FakeExtractor(pages)
@@ -922,10 +921,10 @@ def test_pipeline_shows_spinner_for_uncached_llm_chunk():
 
     converter.convert(Path("docs/sample.pdf"))
 
-    assert "- Waiting for LLM chunk 1/1" in stream.getvalue()
+    assert stream.getvalue() == ""
 
 
-def test_pipeline_skips_spinner_for_cached_chunk(tmp_path):
+def test_pipeline_does_not_write_to_progress_stream_for_cached_chunk(tmp_path):
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_bytes(b"sample-pdf-bytes")
     cache_options = ChunkCacheOptions(
@@ -973,11 +972,20 @@ def test_pipeline_emits_progress_for_uncached_and_cached_chunks(tmp_path):
 
     first_converter.convert(pdf_path)
 
-    assert [event.kind for event in first_events] == [
+    assert [event.kind for event in first_events if event.kind.startswith("request")] == [
         "request_started",
         "request_completed",
         "request_started",
         "request_completed",
+    ]
+    assert ("stage_started", "conversion") in [
+        (event.kind, event.operation) for event in first_events
+    ]
+    assert ("stage_started", "extract") in [
+        (event.kind, event.operation) for event in first_events
+    ]
+    assert ("stage_started", "chunk") in [
+        (event.kind, event.operation) for event in first_events
     ]
 
     second_events = []
@@ -991,8 +999,11 @@ def test_pipeline_emits_progress_for_uncached_and_cached_chunks(tmp_path):
 
     second_converter.convert(pdf_path)
 
-    assert [event.kind for event in second_events] == ["cache_hit", "cache_hit"]
-    assert [event.operation for event in second_events] == ["document_class", "chunk"]
+    cache_hit_events = [event for event in second_events if event.kind == "cache_hit"]
+    assert [event.operation for event in cache_hit_events] == ["document_class", "chunk"]
+    assert ("stage_started", "document_class") in [
+        (event.kind, event.operation) for event in second_events
+    ]
 
 
 def test_pipeline_reuses_chunk_cache_after_successful_run(tmp_path):
@@ -1821,26 +1832,3 @@ def test_pipeline_supports_disabled_prefetch():
 def test_pipeline_rejects_negative_prefetch():
     with pytest.raises(ValueError, match="prefetch_chunks"):
         LLMPdfConverter(FakeClient(), prefetch_chunks=-1)
-
-
-def test_llm_wait_spinner_skips_non_tty_stream():
-    stream = io.StringIO()
-    spinner = _LlmWaitSpinner(stream)
-
-    with spinner.spin("Waiting for LLM chunk 1/1"):
-        pass
-
-    assert stream.getvalue() == ""
-
-
-def test_llm_wait_spinner_clears_line_after_error():
-    stream = FakeTtyStream()
-    spinner = _LlmWaitSpinner(stream)
-
-    with pytest.raises(RuntimeError, match="failed"):
-        with spinner.spin("Waiting for LLM chunk 1/1"):
-            raise RuntimeError("failed")
-
-    output = stream.getvalue()
-    assert "- Waiting for LLM chunk 1/1" in output
-    assert output.endswith("\r")

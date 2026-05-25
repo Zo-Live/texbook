@@ -18,6 +18,7 @@ from .extract.base import DocumentExtractionError, ImageRenderOptions
 from .llm.cache import ChunkCacheOptions
 from .llm.client import OpenAICompatibleClient
 from .llm.config import LLMConfig, LLMConfigError
+from .llm.factory import PdfConversionOptions, build_pdf_converter
 from .llm.pipeline import LLMPdfConverter
 from .llm.presets import (
     DEFAULT_PROMPT_PRESET_NAME,
@@ -101,6 +102,10 @@ def _format_progress_event(event: ProgressEvent) -> str:
         return f"Processing: {event.label}"
     if event.kind == "batch_item_failed":
         return f"Failed: {event.label}: {event.error}"
+    if event.kind == "stage_started":
+        return f"Starting: {event.label or event.operation}"
+    if event.kind == "request_started":
+        return f"Requesting: {event.label or event.operation}"
     if event.kind == "cache_hit":
         return f"Cache hit: {event.label or event.operation}"
     if event.kind == "retry_scheduled":
@@ -421,15 +426,6 @@ def _build_converter(
     except (LLMConfigError, PromptPresetError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    llm_client = client or OpenAICompatibleClient(config)
-    llm_scheduler = scheduler or _build_llm_scheduler(
-        llm_retries=llm_retries,
-        llm_retry_initial_delay=llm_retry_initial_delay,
-        llm_retry_max_delay=llm_retry_max_delay,
-        llm_max_concurrency=llm_max_concurrency,
-        llm_min_request_interval=llm_min_request_interval,
-        progress_reporter=progress_reporter,
-    )
     cache_options = None
     if not no_cache:
         cache_options = ChunkCacheOptions(
@@ -440,24 +436,38 @@ def _build_converter(
             llm_temperature=config.temperature,
             llm_max_tokens=config.max_tokens,
         )
-    return LLMPdfConverter(
-        llm_client,
-        chunk_pages=chunk_pages,
-        image_dpi=image_dpi,
-        image_options=image_options,
-        prefetch_chunks=prefetch_chunks,
-        cache_options=cache_options,
-        extra_prompt=extra_prompt or "",
-        prompt_preset=resolved_prompt_preset,
-        title_source=resolved_title_source,
-        manual_title=resolved_manual_title,
-        show_date=show_date,
-        document_class=document_class_mode,
-        structure_options=structure_options,
-        scheduler=llm_scheduler,
-        progress_reporter=progress_reporter,
-        output_options=output_options,
-    )
+    try:
+        conversion_options = PdfConversionOptions(
+            chunk_pages=chunk_pages,
+            image_dpi=image_dpi,
+            image_options=image_options,
+            prefetch_chunks=prefetch_chunks,
+            cache_options=cache_options,
+            extra_prompt=extra_prompt or "",
+            prompt_preset=resolved_prompt_preset,
+            title_source=resolved_title_source,
+            manual_title=resolved_manual_title,
+            show_date=show_date,
+            document_class=document_class_mode,
+            structure_options=structure_options,
+            output_options=output_options,
+            retry_options=RetryOptions(
+                retries=llm_retries,
+                initial_delay=llm_retry_initial_delay,
+                max_delay=llm_retry_max_delay,
+            ),
+            llm_max_concurrency=llm_max_concurrency,
+            llm_min_request_interval=llm_min_request_interval,
+        )
+        return build_pdf_converter(
+            config,
+            options=conversion_options,
+            client=client,
+            scheduler=scheduler,
+            progress_reporter=progress_reporter,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _load_cli_prompt_preset(name: str) -> PromptPreset:
