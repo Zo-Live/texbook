@@ -37,6 +37,7 @@ SYSTEM_PROMPT = """你是中文数学讲义的 LaTeX 整理助手。
 11. 当前不支持图片、图表或 figure 裁切资源输出；不要生成 \\includegraphics 或引用不存在的文件，改用 % TODO: figure pending_asset ... 注释。
 12. 边栏、多栏、旁注等复杂版面按自然阅读顺序整理；无法可靠合并时输出 % TODO: layout ... 注释，不要强行猜测。
 13. 必须遵守用户消息中给出的目标 document class 要求；只有目标为 Beamer 时才输出 frame、\\frametitle、block 等 Beamer 结构。
+14. 如果用户消息要求不要单独生成 Beamer 标题页，就不要补写 \\titlepage 或文档级标题命令。
 """
 
 TITLE_SYSTEM_PROMPT = """你是中文数学讲义的标题整理助手。

@@ -88,6 +88,13 @@ uv run texbook extract "input/slides.pdf" --project -o "slides-project" \
   --document-class ctexbeamer --beamer-box-style tcolorbox
 ```
 
+Beamer 项目默认会根据文件名或 `--title-source` 生成一个额外标题页。如果原 PDF 已经自带封面页，不希望再插入文件名标题页，可以关闭该行为：
+
+```bash
+uv run texbook extract "input/slides.pdf" --project -o "slides-project" \
+  --document-class ctexbeamer --no-beamer-title-page
+```
+
 CTeX 输出默认沿用 CTeX 自带字体配置。如果本机已安装中文字体，并希望避免默认 Fandol 字体在部分 XeLaTeX 环境中的 fontspec warning，可以使用本机字体配置：
 
 ```bash
@@ -191,6 +198,7 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 - `--temperature`：LLM 采样温度，默认 `1.0`；`extract` 和 `batch` 都支持。
 - `--document-class`：LaTeX 文档类，支持 `auto`、`article`、`book`、`beamer`、`ctexart`、`ctexbook`、`ctexbeamer`，默认 `auto`；`extract` 和 `batch`、单文件和项目模式都支持。
 - `--beamer-box-style`：Beamer 强调块样式，支持 `block`、`tcolorbox`，默认 `block`。
+- `--beamer-title-page/--no-beamer-title-page`：是否额外根据 LaTeX 标题块生成 Beamer 标题页，默认生成；关闭后原 PDF 封面页会作为普通 frame 保留。
 - `--ctex-font-profile`：CTeX 字体配置，支持 `default`、`local`，默认 `default`；`local` 使用本机中文字体并生成 `fontset=none`。
 - `--project`：输出目录化 LaTeX 项目；`extract` 需要同时指定 `-o <dir>`，`batch` 会为每个 PDF 创建独立项目目录。
 - `--structure`：项目结构规划模式，支持 `auto`、`off`、`local`、`llm`，默认 `auto`，仅项目模式生效。

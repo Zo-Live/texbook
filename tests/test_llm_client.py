@@ -180,6 +180,8 @@ def test_build_chunk_messages_contains_document_class_instruction():
     assert r"\frametitle" in user_text
     assert "提纲页保留为单独 frame" in user_text
     assert "[allowframebreaks]" in user_text
+    assert "\\title" in user_text
+    assert "Beamer 标题页由项目外壳根据文件名生成" in user_text
 
 
 def test_build_chunk_messages_can_request_tcolorbox_style():
@@ -197,6 +199,20 @@ def test_build_chunk_messages_can_request_tcolorbox_style():
     user_text = messages[1]["content"][0]["text"]
     assert "texbookinfobox" in user_text
     assert "不要自行定义 tcolorbox 样式" in user_text
+
+
+def test_build_chunk_messages_can_disable_beamer_title_page():
+    messages = build_chunk_messages(
+        document_title="第六章",
+        document_class=LatexDocumentClass.ctexbeamer,
+        pages=[PdfPageContext(page_number=1, width=1, height=1)],
+        chunk_index=1,
+        total_chunks=1,
+        output_options=LatexOutputOptions(beamer_title_page=False),
+    )
+
+    user_text = messages[1]["content"][0]["text"]
+    assert "不要额外生成 Beamer 标题页" in user_text
 
 
 def test_build_document_class_messages_contains_evidence_and_image():

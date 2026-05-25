@@ -31,6 +31,16 @@ class DummyClient:
 runner = CliRunner()
 
 
+def _command_option_names(command: str) -> set[str]:
+    click_command = typer.main.get_command(app)
+    subcommand = click_command.commands[command]
+    names: set[str] = set()
+    for parameter in subcommand.params:
+        names.update(getattr(parameter, "opts", ()))
+        names.update(getattr(parameter, "secondary_opts", ()))
+    return names
+
+
 def _custom_preset():
     base = default_prompt_preset()
     return PromptPreset(
@@ -164,11 +174,13 @@ def test_build_converter_passes_latex_output_options(tmp_path):
         cache_dir=tmp_path / "cache",
         beamer_box_style=BeamerBoxStyleOption.tcolorbox,
         ctex_font_profile=CtexFontProfileOption.local,
+        beamer_title_page=False,
         client=DummyClient(),
     )
 
     assert converter.output_options.beamer_box_style.value == "tcolorbox"
     assert converter.output_options.ctex_font_profile.value == "local"
+    assert converter.output_options.beamer_title_page is False
 
 
 def test_build_converter_accepts_prompt_preset_object(tmp_path):
@@ -476,26 +488,24 @@ def test_conversion_commands_expose_temperature_option(command):
 
 @pytest.mark.parametrize("command", ["extract", "batch"])
 def test_conversion_commands_expose_project_options(command):
-    result = runner.invoke(app, [command, "--help"])
+    options = _command_option_names(command)
 
-    assert result.exit_code == 0
-    assert "--project" in result.output
-    assert "--force" in result.output
-    assert "--structure" in result.output
-    assert "--structure-chunk" in result.output
-    assert "--structure-max" in result.output
+    assert "--project" in options
+    assert "--force" in options
+    assert "--structure" in options
+    assert "--structure-chunk-pages" in options
+    assert "--structure-max-pages" in options
 
 
 @pytest.mark.parametrize("command", ["extract", "batch"])
 def test_conversion_commands_expose_scheduler_options(command):
-    result = runner.invoke(app, [command, "--help"])
+    options = _command_option_names(command)
 
-    assert result.exit_code == 0
-    assert "--llm-retries" in result.output
-    assert "--llm-max-concurr" in result.output
-    assert "--llm-min-request" in result.output
+    assert "--llm-retries" in options
+    assert "--llm-max-concurrency" in options
+    assert "--llm-min-request-interval" in options
     if command == "batch":
-        assert "--batch-workers" in result.output
+        assert "--batch-workers" in options
 
 
 def test_presets_cli_adds_and_shows_repository_preset(tmp_path, monkeypatch):

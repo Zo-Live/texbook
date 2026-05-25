@@ -26,6 +26,7 @@ class LatexOutputOptions:
 
     beamer_box_style: BeamerBoxStyle = BeamerBoxStyle.block
     ctex_font_profile: CtexFontProfile = CtexFontProfile.default
+    beamer_title_page: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -38,12 +39,14 @@ class LatexOutputOptions:
             "ctex_font_profile",
             _coerce_enum(CtexFontProfile, self.ctex_font_profile),
         )
+        object.__setattr__(self, "beamer_title_page", bool(self.beamer_title_page))
 
-    def to_metadata(self) -> dict[str, str]:
+    def to_metadata(self) -> dict[str, object]:
         """Return a stable representation for project metadata and caches."""
         return {
             "beamer_box_style": self.beamer_box_style.value,
             "ctex_font_profile": self.ctex_font_profile.value,
+            "beamer_title_page": self.beamer_title_page,
         }
 
 

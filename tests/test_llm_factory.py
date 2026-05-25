@@ -50,7 +50,10 @@ def test_build_pdf_converter_uses_core_options(tmp_path):
         llm_temperature=config.temperature,
         llm_max_tokens=config.max_tokens,
     )
-    output_options = LatexOutputOptions(beamer_box_style=BeamerBoxStyle.tcolorbox)
+    output_options = LatexOutputOptions(
+        beamer_box_style=BeamerBoxStyle.tcolorbox,
+        beamer_title_page=False,
+    )
     options = PdfConversionOptions(
         chunk_pages=2,
         image_dpi=144,
@@ -91,6 +94,7 @@ def test_build_pdf_converter_uses_core_options(tmp_path):
     assert converter.document_class_mode == DocumentClassMode.ctexbeamer
     assert converter.structure_options.mode == StructureMode.local
     assert converter.output_options is output_options
+    assert converter.output_options.beamer_title_page is False
     assert converter.scheduler.retry_options.retries == 4
     assert converter.scheduler.rate_limiter.max_concurrency == 2
     assert converter.scheduler.rate_limiter.min_request_interval == 0.25

@@ -228,6 +228,7 @@ class LatexConverter:
                 r"\usepackage{amsmath}",
                 r"\usepackage{amssymb}",
                 *self._beamer_box_lines(),
+                r"\setbeamertemplate{navigation symbols}{}",
                 r"\makeatletter",
                 r"\@ifundefined{definition}{\newtheorem{definition}{定义}}{}",
                 r"\@ifundefined{theorem}{\newtheorem{theorem}{定理}}{}",
@@ -253,12 +254,14 @@ class LatexConverter:
 
     def title_page_lines(self) -> list[str]:
         """Return document opening title page commands."""
-        if self.document_class.is_beamer:
+        if self.document_class.is_beamer and self.output_options.beamer_title_page:
             return [
                 r"\begin{frame}",
                 r"\titlepage",
                 r"\end{frame}",
             ]
+        if self.document_class.is_beamer:
+            return []
         return [r"\maketitle"]
 
     def title_block_lines(
@@ -306,6 +309,7 @@ class LatexConverter:
         return cleaned_fragments
 
     def _document_header(self, title: str, *, show_date: bool = False) -> List[str]:
+        title_page_lines = self.title_page_lines()
         return [
             "% !TEX program = xelatex",
             self.documentclass_line(),
@@ -314,7 +318,7 @@ class LatexConverter:
             *self.title_block_lines(title, show_date=show_date),
             "",
             r"\begin{document}",
-            *self.title_page_lines(),
+            *title_page_lines,
             "",
         ]
 

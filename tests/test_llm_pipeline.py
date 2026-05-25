@@ -538,6 +538,40 @@ def test_pipeline_can_build_project_output():
     assert all(page.image_base64 is None for chunk in extractor.chunks for page in chunk.pages)
 
 
+def test_pipeline_can_disable_beamer_title_page_in_project_output():
+    pages = [
+        PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),
+        PdfPageContext(page_number=2, width=1, height=1, image_base64="page-2"),
+    ]
+    extractor = FakeExtractor(
+        pages,
+        bookmarks=[
+            BookmarkEntry(level=1, title="第六章 线性空间", page_number=1),
+            BookmarkEntry(level=1, title="6.1 集合与映射", page_number=2),
+        ],
+    )
+    client = FakeClient(
+        latex_fragments=[
+            r"\section*{第六章 线性空间}\begin{frame}\frametitle{第六章 线性空间}\end{frame}",
+            r"\begin{frame}\frametitle{6.1 集合与映射}\begin{itemize}\item 集合\item 映射\end{itemize}\end{frame}",
+        ]
+    )
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=1,
+        output_options=LatexOutputOptions(beamer_title_page=False),
+    )
+
+    project = converter.convert_project(Path("docs/sample.pdf"))
+
+    main = project.files[PurePosixPath("main.tex")]
+    assert r"\titlepage" not in main
+    assert r"\subtitle{第六章 线性空间}" not in main
+    assert r"\input{chapters/chapter01}" in main
+    assert project.metadata["output_options"]["beamer_title_page"] is False
+
+
 def test_project_output_records_complex_content_metadata_from_chunks():
     pages = [PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1")]
     extractor = FakeExtractor(pages)
@@ -1790,6 +1824,10 @@ def test_chunk_cache_run_key_changes_with_inputs(tmp_path):
         output_options=LatexOutputOptions(
             beamer_box_style=BeamerBoxStyle.tcolorbox,
         ),
+    ).run_key
+    assert base.run_key != _build_cache_run(
+        tmp_path,
+        output_options=LatexOutputOptions(beamer_title_page=False),
     ).run_key
     assert base.run_key != _build_cache_run(
         tmp_path,

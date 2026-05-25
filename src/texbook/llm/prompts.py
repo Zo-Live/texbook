@@ -313,13 +313,25 @@ def _document_class_instruction(
                 "强调块使用 Beamer 原生 block、exampleblock、alertblock 环境；"
                 "不要输出 tcolorbox 环境。"
             )
+        if resolved_output_options.beamer_title_page:
+            title_page_instruction = (
+                "Beamer 标题页由项目外壳根据文件名生成；"
+                "纯封面、章标题或节标题页不要额外生成独立空 frame，"
+                "应作为标题页信息处理；包含条目列表的目录或提纲页保留为单独 frame。"
+            )
+        else:
+            title_page_instruction = (
+                "不要额外生成 Beamer 标题页；"
+                "纯封面、章标题或节标题页需要保留为普通 frame，"
+                "不要折叠为标题页信息；包含条目列表的目录或提纲页保留为单独 frame。"
+            )
         return (
             "目标文档类是 Beamer。正文片段应保留幻灯片边界，使用 frame、"
             "\\frametitle 以及可编译的强调块结构。"
-            "纯封面、章标题或节标题页不要生成独立空 frame，应作为标题页信息处理；"
-            "包含条目列表的目录或提纲页保留为单独 frame。"
+            "不要输出 \\title、\\author、\\institute、\\date 或 \\titlepage；"
+            f"{title_page_instruction}"
             "长证明、长例题、长列表必须按语义拆成多个 frame，例如命题一页、"
-            "各小问证明分别分页、逆映射公式单独分页；不要只依赖单个 "
+            "各小问证明分别分页、满射证明、单射证明、逆映射公式与结论分别分页；不要只依赖单个 "
             "[allowframebreaks]。"
             f"{box_instruction}"
         )

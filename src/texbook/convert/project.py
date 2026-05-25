@@ -350,7 +350,7 @@ class LatexProjectBuilder:
         sections: Sequence[LatexProjectSection],
         cleaned_section_fragments: Sequence[Sequence[str]],
     ) -> tuple[str | None, list[LatexProjectSection], list[Sequence[str]]]:
-        if not latex.document_class.is_beamer:
+        if not latex.document_class.is_beamer or not latex.output_options.beamer_title_page:
             return None, list(sections), list(cleaned_section_fragments)
 
         subtitles: list[str] = []

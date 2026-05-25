@@ -346,6 +346,7 @@ def _build_converter(
     document_class: DocumentClassOption | str = DocumentClassOption.auto,
     beamer_box_style: BeamerBoxStyleOption | str = BeamerBoxStyleOption.block,
     ctex_font_profile: CtexFontProfileOption | str = CtexFontProfileOption.default,
+    beamer_title_page: bool = True,
     structure: StructureOption | str = StructureOption.auto,
     structure_chunk_pages: int = 8,
     structure_max_pages: int = 32,
@@ -398,6 +399,7 @@ def _build_converter(
         output_options = LatexOutputOptions(
             beamer_box_style=BeamerBoxStyle(resolved_beamer_box_style),
             ctex_font_profile=CtexFontProfile(resolved_ctex_font_profile),
+            beamer_title_page=beamer_title_page,
         )
 
         config = LLMConfig.from_values(
@@ -748,6 +750,11 @@ def extract(
         case_sensitive=False,
         help="CTeX font profile: default or local",
     ),
+    beamer_title_page: bool = typer.Option(
+        True,
+        "--beamer-title-page/--no-beamer-title-page",
+        help="Generate an extra Beamer title page from the LaTeX title block",
+    ),
     preset: str = typer.Option(
         DEFAULT_PROMPT_PRESET_NAME,
         "--preset",
@@ -884,6 +891,7 @@ def extract(
         document_class=document_class,
         beamer_box_style=beamer_box_style,
         ctex_font_profile=ctex_font_profile,
+        beamer_title_page=beamer_title_page,
         structure=structure,
         structure_chunk_pages=structure_chunk_pages,
         structure_max_pages=structure_max_pages,
@@ -1003,6 +1011,11 @@ def batch(
         "--ctex-font-profile",
         case_sensitive=False,
         help="CTeX font profile: default or local",
+    ),
+    beamer_title_page: bool = typer.Option(
+        True,
+        "--beamer-title-page/--no-beamer-title-page",
+        help="Generate an extra Beamer title page from the LaTeX title block",
     ),
     preset: str = typer.Option(
         DEFAULT_PROMPT_PRESET_NAME,
@@ -1176,6 +1189,7 @@ def batch(
             document_class=document_class,
             beamer_box_style=beamer_box_style,
             ctex_font_profile=ctex_font_profile,
+            beamer_title_page=beamer_title_page,
             structure=structure,
             structure_chunk_pages=structure_chunk_pages,
             structure_max_pages=structure_max_pages,

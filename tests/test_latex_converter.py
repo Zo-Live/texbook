@@ -203,6 +203,7 @@ def test_project_builder_builds_main_preamble_and_chapters():
     assert project.metadata["output_options"] == {
         "beamer_box_style": "block",
         "ctex_font_profile": "default",
+        "beamer_title_page": True,
     }
 
     main = project.files[PurePosixPath("main.tex")]
@@ -284,6 +285,7 @@ def test_project_builder_can_emit_ctexbeamer_project():
     assert r"\begin{frame}" in main
     assert r"\titlepage" in main
     assert r"\@ifundefined{definition}" in preamble
+    assert r"\setbeamertemplate{navigation symbols}{}" in preamble
     assert r"\begin{frame}" in chapter
     assert r"\frametitle{集合}" in chapter
     assert r"\begin{block}{注意}" in chapter
@@ -403,6 +405,73 @@ def test_project_builder_folds_beamer_title_only_frontmatter_into_subtitle():
     assert r"\subtitle{第六章 线性空间}" in main
     assert r"\input{chapters/chapter01}" in main
     assert "frontmatter" not in main
+
+
+def test_project_builder_can_disable_beamer_title_page():
+    builder = LatexProjectBuilder(
+        output_options=LatexOutputOptions(beamer_title_page=False),
+    )
+    plan = StructurePlan(
+        source=StructurePlanSource.llm_toc,
+        confidence=0.8,
+        items=[
+            StructurePlanItem(
+                kind=StructureItemKind.frontmatter,
+                title="第六章 线性空间",
+                start_page=1,
+                end_page=1,
+                confidence=0.8,
+                source=StructurePlanSource.llm_toc,
+            ),
+            StructurePlanItem(
+                kind=StructureItemKind.chapter,
+                title="集合",
+                start_page=2,
+                end_page=4,
+                confidence=0.8,
+                source=StructurePlanSource.llm_toc,
+            ),
+        ],
+    )
+
+    project = builder.build_from_plan(
+        title="6.1 集合与映射",
+        document_class=LatexDocumentClass.ctexbeamer,
+        structure_plan=plan,
+        sections=[
+            LatexProjectSection(
+                item=plan.items[0],
+                fragments=[
+                    r"""
+                    \section*{第六章 线性空间}
+                    \begin{frame}
+                    \frametitle{第六章 线性空间}
+                    \end{frame}
+                    """
+                ],
+            ),
+            LatexProjectSection(
+                item=plan.items[1],
+                fragments=[
+                    r"""
+                    \begin{frame}
+                    \frametitle{6.1 集合与映射}
+                    \begin{itemize}
+                    \item 集合
+                    \item 映射
+                    \end{itemize}
+                    \end{frame}
+                    """
+                ],
+            ),
+        ],
+    )
+
+    main = project.files[PurePosixPath("main.tex")]
+    assert r"\titlepage" not in main
+    assert r"\subtitle{第六章 线性空间}" not in main
+    assert r"\input{chapters/frontmatter}" in main
+    assert project.metadata["output_options"]["beamer_title_page"] is False
 
 
 def test_non_beamer_project_cleans_beamer_only_wrappers():
