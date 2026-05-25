@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -28,6 +29,12 @@ from PySide6.QtWidgets import (
 )
 
 from texbook.gui.resources import APP_DISPLAY_NAME
+from texbook.gui.selection import (
+    GuiInputKind,
+    GuiInputSelection,
+    GuiPathSelectionState,
+    input_kind_from_label,
+)
 from texbook.gui.widgets import InlineField, MetricPill, OptionGrid, SectionPanel
 
 
@@ -37,6 +44,7 @@ class ConversionMainPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("conversionMainPanel")
+        self.selection_state = GuiPathSelectionState()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 18)
@@ -49,6 +57,9 @@ class ConversionMainPanel(QWidget):
         content.addWidget(self._create_settings_scroll(), 3)
         content.addWidget(self._create_task_list_panel(), 2)
         layout.addLayout(content, 1)
+
+        self._connect_selection_controls()
+        self._refresh_path_state()
 
     def _create_command_bar(self) -> QFrame:
         command_bar = QFrame(self)
@@ -81,8 +92,9 @@ class ConversionMainPanel(QWidget):
         add_task = QPushButton("添加任务", command_bar)
         add_task.setObjectName("addTaskButton")
         add_task.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder))
-        add_task.setToolTip("文件选择流程将在后续阶段接入。")
+        add_task.setToolTip("选择 PDF 输入和产物目录后可添加任务。")
         add_task.setEnabled(False)
+        self.add_task_button = add_task
         layout.addWidget(add_task)
 
         start = QPushButton("开始转换", command_bar)
@@ -135,17 +147,19 @@ class ConversionMainPanel(QWidget):
         pdf_input.setObjectName("pdfInputField")
         pdf_input.setPlaceholderText("选择 PDF 文件或目录")
         pdf_input.setReadOnly(True)
+        self.pdf_input_field = pdf_input
         browse = self._make_icon_button(
             "pdfInputBrowseButton",
             QStyle.StandardPixmap.SP_DialogOpenButton,
             "浏览 PDF 输入",
         )
-        browse.setEnabled(False)
+        self.pdf_input_browse_button = browse
         grid.add_row("PDF 输入", InlineField(pdf_input, browse, parent=panel))
 
         input_type = QComboBox(panel)
         input_type.setObjectName("inputTypeCombo")
         input_type.addItems(["单个 PDF", "多个 PDF", "目录批量"])
+        self.input_type_combo = input_type
         grid.add_row("输入类型", input_type)
 
         panel.body_layout.addWidget(grid)
@@ -159,12 +173,13 @@ class ConversionMainPanel(QWidget):
         output_dir.setObjectName("outputDirectoryField")
         output_dir.setPlaceholderText("选择产物目录")
         output_dir.setReadOnly(True)
+        self.output_directory_field = output_dir
         browse = self._make_icon_button(
             "outputBrowseButton",
             QStyle.StandardPixmap.SP_DirOpenIcon,
             "浏览产物目录",
         )
-        browse.setEnabled(False)
+        self.output_browse_button = browse
         grid.add_row("产物目录", InlineField(output_dir, browse, parent=panel))
 
         overwrite = QCheckBox("覆盖前确认", panel)
@@ -443,3 +458,86 @@ class ConversionMainPanel(QWidget):
         spin_box.setValue(value)
         spin_box.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         return spin_box
+
+    def _connect_selection_controls(self) -> None:
+        self.pdf_input_browse_button.clicked.connect(self._browse_pdf_input)
+        self.output_browse_button.clicked.connect(self._browse_output_directory)
+        self.input_type_combo.currentTextChanged.connect(self._change_input_kind)
+
+    def _browse_pdf_input(self) -> None:
+        kind = self._current_input_kind()
+        if kind == GuiInputKind.single_file:
+            path, _selected_filter = QFileDialog.getOpenFileName(
+                self,
+                "选择 PDF 文件",
+                "",
+                "PDF 文件 (*.pdf)",
+            )
+            if path:
+                self.set_input_selection(GuiInputSelection.from_single_file(path))
+            return
+
+        if kind == GuiInputKind.multiple_files:
+            paths, _selected_filter = QFileDialog.getOpenFileNames(
+                self,
+                "选择多个 PDF 文件",
+                "",
+                "PDF 文件 (*.pdf)",
+            )
+            if paths:
+                self.set_input_selection(GuiInputSelection.from_multiple_files(paths))
+            return
+
+        directory = QFileDialog.getExistingDirectory(self, "选择 PDF 目录", "")
+        if directory:
+            self.set_input_selection(GuiInputSelection.from_directory(directory))
+
+    def _browse_output_directory(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "选择产物目录", "")
+        if directory:
+            self.set_output_directory(directory)
+
+    def _change_input_kind(self, _text: str) -> None:
+        self.set_input_selection(GuiInputSelection.empty(self._current_input_kind()))
+
+    def set_input_selection(self, selection: GuiInputSelection) -> None:
+        """Set the current PDF input selection and refresh dependent controls."""
+        self.selection_state = GuiPathSelectionState(
+            input_selection=selection,
+            output_directory=self.selection_state.output_directory,
+        )
+        self._refresh_path_state()
+
+    def set_output_directory(self, directory: str) -> None:
+        """Set the current output directory and refresh dependent controls."""
+        self.selection_state = GuiPathSelectionState(
+            input_selection=self.selection_state.input_selection,
+            output_directory=directory,
+        )
+        self._refresh_path_state()
+
+    def _refresh_path_state(self) -> None:
+        self.pdf_input_field.setText(self.selection_state.input_selection.display_text())
+        self.output_directory_field.setText(self.selection_state.output_directory)
+        self.add_task_button.setEnabled(self.selection_state.can_add_task)
+        self._publish_status_message(self._path_status_message())
+
+    def _path_status_message(self) -> str:
+        has_input = self.selection_state.input_selection.is_valid
+        has_output = bool(self.selection_state.output_directory)
+        if has_input and has_output:
+            return "已选择 PDF 输入和产物目录"
+        if has_input:
+            return "已选择 PDF 输入，请选择产物目录"
+        if has_output:
+            return "已选择产物目录，请选择 PDF 输入"
+        return "请选择 PDF 输入和产物目录"
+
+    def _publish_status_message(self, message: str) -> None:
+        window = self.window()
+        status_bar = getattr(window, "statusBar", None)
+        if callable(status_bar):
+            status_bar().showMessage(message)
+
+    def _current_input_kind(self) -> GuiInputKind:
+        return input_kind_from_label(self.input_type_combo.currentText())
