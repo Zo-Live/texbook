@@ -15,13 +15,14 @@ from PySide6.QtWidgets import (  # noqa: E402
     QLineEdit,
     QMainWindow,
     QPushButton,
-    QRadioButton,
     QSpinBox,
     QToolButton,
     QWidget,
 )
 
+from texbook.document_class import DocumentClassMode  # noqa: E402
 from texbook.gui.app import create_application  # noqa: E402
+from texbook.gui.core_adapter import build_core_conversion_bundle  # noqa: E402
 from texbook.gui.main_panel import ConversionMainPanel  # noqa: E402
 from texbook.gui.main_window import MainWindow  # noqa: E402
 from texbook.gui.resources import (  # noqa: E402
@@ -30,8 +31,11 @@ from texbook.gui.resources import (  # noqa: E402
     APP_WINDOW_TITLE,
     resolve_app_icon_path,
 )
-from texbook.gui.selection import GuiInputKind, GuiInputSelection  # noqa: E402
-from texbook.gui.settings import GuiConversionMode, GuiConversionSettings  # noqa: E402
+from texbook.gui.selection import GuiInputKind, GuiInputSelection, GuiPathSelectionState  # noqa: E402
+from texbook.gui.settings import GuiConversionMode, GuiConversionSettings, GuiOutputKind  # noqa: E402
+from texbook.gui.tasks import GuiTaskStatus, create_conversion_tasks  # noqa: E402
+from texbook.output_options import BeamerBoxStyle, CtexFontProfile  # noqa: E402
+from texbook.structure import StructureMode  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,7 +98,6 @@ def test_main_window_shows_conversion_tool_panel_immediately():
     assert central.objectName() == "conversionMainPanel"
     assert central.findChild(QWidget, "inputPanel") is not None
     assert central.findChild(QWidget, "outputPanel") is not None
-    assert central.findChild(QWidget, "modePanel") is not None
     assert central.findChild(QWidget, "parametersPanel") is not None
     assert central.findChild(QWidget, "taskListPanel") is not None
     assert central.findChild(QWidget, "startButton") is not None
@@ -114,9 +117,8 @@ def test_conversion_panel_exposes_future_task_control_points():
         "pdfInputBrowseButton",
         "outputDirectoryField",
         "outputBrowseButton",
-        "singleFileModeRadio",
-        "projectModeRadio",
-        "batchModeRadio",
+        "outputKindCombo",
+        "batchPatternField",
         "pageOptionsPanel",
         "pagesField",
         "manualTitleField",
@@ -170,8 +172,10 @@ def test_conversion_panel_default_settings_match_cli_defaults():
 
     settings = panel.current_settings()
 
-    assert settings.conversion_mode == GuiConversionMode.single_file
+    assert settings.conversion_mode == GuiConversionMode.tex_file
+    assert settings.output_kind == GuiOutputKind.tex_file
     assert settings.confirm_overwrite is True
+    assert settings.batch_pattern == "*.pdf"
     assert settings.pages == ""
     assert settings.document_class == "auto"
     assert settings.structure_mode == "auto"
@@ -217,6 +221,7 @@ def test_conversion_panel_settings_round_trip_preserves_all_fields():
         GuiConversionSettings(
             conversion_mode=GuiConversionMode.project,
             confirm_overwrite=False,
+            batch_pattern="slides-*.pdf",
             pages="1,3-5",
             document_class="ctexbeamer",
             structure_mode="llm",
@@ -258,7 +263,9 @@ def test_conversion_panel_settings_round_trip_preserves_all_fields():
     settings = panel.current_settings()
 
     assert settings.conversion_mode == GuiConversionMode.project
+    assert settings.output_kind == GuiOutputKind.project
     assert settings.confirm_overwrite is False
+    assert settings.batch_pattern == "slides-*.pdf"
     assert settings.pages == "1,3-5"
     assert settings.document_class == "ctexbeamer"
     assert settings.structure_mode == "llm"
@@ -325,19 +332,21 @@ def test_conversion_panel_option_dependencies_follow_mode_cache_and_image_format
     assert panel.findChild(QComboBox, "structureModeCombo").isEnabled() is False
     assert panel.findChild(QSpinBox, "structureChunkPagesSpinBox").isEnabled() is False
     assert panel.findChild(QSpinBox, "batchWorkersSpinBox").isEnabled() is False
+    assert panel.findChild(QLineEdit, "batchPatternField").isEnabled() is False
 
-    panel.findChild(QRadioButton, "projectModeRadio").click()
+    panel.findChild(QComboBox, "outputKindCombo").setCurrentText("目录化项目")
 
     assert panel.current_settings().conversion_mode == GuiConversionMode.project
     assert panel.findChild(QComboBox, "structureModeCombo").isEnabled() is True
     assert panel.findChild(QSpinBox, "structureChunkPagesSpinBox").isEnabled() is True
     assert panel.findChild(QSpinBox, "batchWorkersSpinBox").isEnabled() is False
 
-    panel.findChild(QRadioButton, "batchModeRadio").click()
+    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("目录批量")
 
-    assert panel.current_settings().conversion_mode == GuiConversionMode.batch
-    assert panel.findChild(QComboBox, "structureModeCombo").isEnabled() is False
+    assert panel.current_settings().conversion_mode == GuiConversionMode.project
+    assert panel.findChild(QComboBox, "structureModeCombo").isEnabled() is True
     assert panel.findChild(QSpinBox, "batchWorkersSpinBox").isEnabled() is True
+    assert panel.findChild(QLineEdit, "batchPatternField").isEnabled() is True
 
     panel.findChild(QCheckBox, "clearCacheCheckBox").setChecked(True)
     assert panel.current_settings().clear_cache is True
@@ -403,8 +412,8 @@ def test_conversion_panel_single_pdf_and_output_directory_enable_add_task(monkey
         lambda *args, **kwargs: (r"C:\books\lecture.pdf", "PDF 文件 (*.pdf)"),
     )
     monkeypatch.setattr(
-        "texbook.gui.main_panel.QFileDialog.getExistingDirectory",
-        lambda *args, **kwargs: r"D:\tex-output",
+        "texbook.gui.main_panel.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (r"D:\tex-output\lecture.tex", "LaTeX 文件 (*.tex)"),
     )
 
     panel.findChild(QToolButton, "pdfInputBrowseButton").click()
@@ -416,8 +425,8 @@ def test_conversion_panel_single_pdf_and_output_directory_enable_add_task(monkey
 
     panel.findChild(QToolButton, "outputBrowseButton").click()
 
-    assert panel.selection_state.output_directory == r"D:\tex-output"
-    assert panel.findChild(QLineEdit, "outputDirectoryField").text() == r"D:\tex-output"
+    assert panel.selection_state.output_directory == r"D:\tex-output\lecture.tex"
+    assert panel.findChild(QLineEdit, "outputDirectoryField").text() == r"D:\tex-output\lecture.tex"
     assert panel.findChild(QPushButton, "addTaskButton").isEnabled()
     assert not panel.findChild(QPushButton, "startButton").isEnabled()
 
@@ -514,3 +523,145 @@ def test_main_window_status_bar_tracks_path_selection_state():
 
     window.close()
     app.quit()
+
+
+def test_gui_core_adapter_maps_settings_to_core_options(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "env-model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "env-key")
+    settings = GuiConversionSettings(
+        pages="1,3-4",
+        document_class="ctexbeamer",
+        structure_mode="llm",
+        structure_chunk_pages=6,
+        structure_max_pages=42,
+        manual_title="手动标题",
+        title_source="filename",
+        show_date=True,
+        beamer_title_page=False,
+        prompt_preset="chinese-math",
+        extra_prompt="只提取公式",
+        temperature=0.5,
+        timeout_seconds=30.0,
+        max_tokens=64000,
+        cache_enabled=True,
+        cache_directory=str(tmp_path / "cache"),
+        clear_cache=True,
+        chunk_pages=3,
+        prefetch_chunks=2,
+        llm_max_concurrency=2,
+        llm_min_request_interval=1.5,
+        image_dpi=180,
+        image_dpi_min=120,
+        image_dpi_max=240,
+        image_format="jpeg",
+        jpeg_quality=92,
+        llm_retries=4,
+        llm_retry_initial_delay=3.0,
+        llm_retry_max_delay=40.0,
+        beamer_box_style="tcolorbox",
+        ctex_font_profile="local",
+    )
+
+    bundle = build_core_conversion_bundle(settings, repo_root=ROOT)
+
+    assert bundle.llm_config.model == "env-model"
+    assert bundle.llm_config.api_key == "env-key"
+    assert bundle.pages == [1, 3, 4]
+    assert bundle.conversion_options.document_class == DocumentClassMode.ctexbeamer
+    assert bundle.conversion_options.structure_options.mode == StructureMode.llm
+    assert bundle.conversion_options.manual_title == "手动标题"
+    assert bundle.conversion_options.cache_options.cache_dir == tmp_path / "cache"
+    assert bundle.conversion_options.cache_options.clear is True
+    assert bundle.conversion_options.image_options.image_format == "jpeg"
+    assert bundle.conversion_options.output_options.beamer_box_style == BeamerBoxStyle.tcolorbox
+    assert bundle.conversion_options.output_options.ctex_font_profile == CtexFontProfile.local
+    assert bundle.conversion_options.output_options.beamer_title_page is False
+    assert bundle.conversion_options.retry_options.retries == 4
+    assert bundle.conversion_options.llm_max_concurrency == 2
+
+
+def test_create_tasks_for_single_file_tex_and_project(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    base = GuiConversionSettings(
+        path_state=GuiPathSelectionState(
+            input_selection=GuiInputSelection.from_single_file("lecture.pdf"),
+            output_directory="out/lecture",
+        )
+    )
+
+    tex_task = create_conversion_tasks(base, repo_root=ROOT)[0]
+    project_task = create_conversion_tasks(
+        GuiConversionSettings(
+            path_state=base.path_state,
+            output_kind=GuiOutputKind.project,
+        ),
+        repo_root=ROOT,
+    )[0]
+
+    assert tex_task.source_pdf == Path("lecture.pdf")
+    assert tex_task.output_target.kind == GuiOutputKind.tex_file
+    assert tex_task.output_target.path == Path("out/lecture.tex")
+    assert project_task.output_target.kind == GuiOutputKind.project
+    assert project_task.output_target.path == Path("out/lecture")
+    assert tex_task.status == GuiTaskStatus.pending
+
+
+def test_create_tasks_supports_multiple_pdf_project_output(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    settings = GuiConversionSettings(
+        path_state=GuiPathSelectionState(
+            input_selection=GuiInputSelection.from_multiple_files(["a.pdf", "b.PDF"]),
+            output_directory="out",
+        ),
+        output_kind=GuiOutputKind.project,
+        batch_workers=2,
+    )
+
+    tasks = create_conversion_tasks(settings, repo_root=ROOT)
+
+    assert [task.source_pdf for task in tasks] == [Path("a.pdf"), Path("b.PDF")]
+    assert [task.output_target.path for task in tasks] == [Path("out/a"), Path("out/b")]
+    assert all(task.output_target.kind == GuiOutputKind.project for task in tasks)
+
+
+def test_create_tasks_uses_windows_file_stems_for_native_paths(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    settings = GuiConversionSettings(
+        path_state=GuiPathSelectionState(
+            input_selection=GuiInputSelection.from_multiple_files(
+                [r"C:\books\a.pdf", r"\\server\share\b.PDF"]
+            ),
+            output_directory="out",
+        ),
+        output_kind=GuiOutputKind.tex_file,
+    )
+
+    tasks = create_conversion_tasks(settings, repo_root=ROOT)
+
+    assert [task.label for task in tasks] == ["a.pdf", "b.PDF"]
+    assert [task.output_target.path for task in tasks] == [Path("out/a.tex"), Path("out/b.tex")]
+
+
+def test_create_tasks_expands_directory_pattern(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    (tmp_path / "slides-2.pdf").write_text("", encoding="utf-8")
+    (tmp_path / "slides-1.pdf").write_text("", encoding="utf-8")
+    (tmp_path / "ignore.pdf").write_text("", encoding="utf-8")
+    (tmp_path / "slides.txt").write_text("", encoding="utf-8")
+    settings = GuiConversionSettings(
+        path_state=GuiPathSelectionState(
+            input_selection=GuiInputSelection.from_directory(str(tmp_path)),
+            output_directory=str(tmp_path / "out"),
+        ),
+        output_kind=GuiOutputKind.tex_file,
+        batch_pattern="slides-*.pdf",
+    )
+
+    tasks = create_conversion_tasks(settings, repo_root=ROOT)
+
+    assert [task.source_pdf.name for task in tasks] == ["slides-1.pdf", "slides-2.pdf"]
+    assert [task.output_target.path.name for task in tasks] == ["slides-1.tex", "slides-2.tex"]

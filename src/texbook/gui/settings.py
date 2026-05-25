@@ -8,12 +8,16 @@ from enum import Enum
 from texbook.gui.selection import GuiPathSelectionState
 
 
-class GuiConversionMode(str, Enum):
-    """Conversion modes exposed by the GUI."""
+class GuiOutputKind(str, Enum):
+    """Output forms exposed by the GUI."""
 
-    single_file = "single_file"
+    tex_file = "tex_file"
+    single_file = "tex_file"
     project = "project"
-    batch = "batch"
+
+
+# Backward-compatible alias for tests and callers from the earlier GUI stage.
+GuiConversionMode = GuiOutputKind
 
 
 @dataclass(frozen=True)
@@ -21,8 +25,10 @@ class GuiConversionSettings:
     """All conversion options currently represented by the GUI panel."""
 
     path_state: GuiPathSelectionState = field(default_factory=GuiPathSelectionState)
-    conversion_mode: GuiConversionMode = GuiConversionMode.single_file
+    output_kind: GuiOutputKind = GuiOutputKind.tex_file
+    conversion_mode: GuiOutputKind | None = None
     confirm_overwrite: bool = True
+    batch_pattern: str = "*.pdf"
     pages: str = ""
     document_class: str = "auto"
     structure_mode: str = "auto"
@@ -59,13 +65,22 @@ class GuiConversionSettings:
     beamer_box_style: str = "block"
     ctex_font_profile: str = "default"
 
+    def __post_init__(self) -> None:
+        output_kind = self.conversion_mode or self.output_kind
+        if isinstance(output_kind, str):
+            output_kind = GuiOutputKind(output_kind)
+        object.__setattr__(self, "output_kind", output_kind)
+        object.__setattr__(self, "conversion_mode", output_kind)
+
 
 def validate_gui_settings(settings: GuiConversionSettings) -> list[str]:
     """Return Chinese validation errors for GUI settings."""
     errors: list[str] = []
 
-    if settings.conversion_mode not in {item.value for item in GuiConversionMode}:
-        errors.append("转换模式无效。")
+    if settings.output_kind not in {item.value for item in GuiOutputKind}:
+        errors.append("输出形式无效。")
+    if not settings.batch_pattern.strip():
+        errors.append("目录批量匹配模式不能为空。")
     if settings.document_class not in {
         "auto",
         "article",
@@ -86,7 +101,7 @@ def validate_gui_settings(settings: GuiConversionSettings) -> list[str]:
         errors.append("Beamer 块样式无效。")
     if settings.ctex_font_profile not in {"default", "local"}:
         errors.append("CTeX 字体配置无效。")
-    if _parse_pages(settings.pages) is None and settings.pages.strip():
+    if parse_gui_pages(settings.pages) is None and settings.pages.strip():
         errors.append("页面范围格式无效，请使用 1,3-5 这样的 1-based 页码。")
     if settings.manual_title.strip() and settings.title_source == "llm":
         errors.append("手动标题不能与 LLM 标题来源同时使用。")
@@ -128,10 +143,11 @@ def validate_gui_settings(settings: GuiConversionSettings) -> list[str]:
     return errors
 
 
-def _parse_pages(pages: str) -> list[int] | None:
+def parse_gui_pages(pages: str) -> list[int] | None:
+    """Parse GUI page ranges into unique 1-based page numbers."""
     text = pages.strip()
     if not text:
-        return []
+        return None
 
     resolved: list[int] = []
     try:
@@ -154,4 +170,14 @@ def _parse_pages(pages: str) -> list[int] | None:
     except ValueError:
         return None
 
-    return resolved if resolved else None
+    if not resolved:
+        return None
+
+    seen: set[int] = set()
+    unique_pages: list[int] = []
+    for page in resolved:
+        if page in seen:
+            continue
+        seen.add(page)
+        unique_pages.append(page)
+    return unique_pages

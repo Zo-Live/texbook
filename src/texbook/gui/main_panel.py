@@ -5,7 +5,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -17,7 +16,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
@@ -37,9 +35,11 @@ from texbook.gui.selection import (
 )
 from texbook.gui.settings import (
     GuiConversionMode,
+    GuiOutputKind,
     GuiConversionSettings,
     validate_gui_settings,
 )
+from texbook.gui.tasks import GuiTaskCreationError, GuiTaskStatus, create_conversion_tasks
 from texbook.gui.widgets import InlineField, MetricPill, OptionGrid, SectionPanel
 
 
@@ -50,6 +50,7 @@ class ConversionMainPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("conversionMainPanel")
         self.selection_state = GuiPathSelectionState()
+        self.tasks = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 18)
@@ -127,8 +128,6 @@ class ConversionMainPanel(QWidget):
 
         layout.addWidget(self._create_input_panel())
         layout.addWidget(self._create_output_panel())
-        layout.addWidget(self._create_mode_panel())
-
         parameters = QWidget(pane)
         parameters.setObjectName("parametersPanel")
         parameters_layout = QVBoxLayout(parameters)
@@ -168,6 +167,13 @@ class ConversionMainPanel(QWidget):
         self.input_type_combo = input_type
         grid.add_row("输入类型", input_type)
 
+        batch_pattern = QLineEdit(panel)
+        batch_pattern.setObjectName("batchPatternField")
+        batch_pattern.setPlaceholderText("*.pdf")
+        batch_pattern.setText("*.pdf")
+        self.batch_pattern_field = batch_pattern
+        grid.add_row("批量匹配", batch_pattern)
+
         panel.body_layout.addWidget(grid)
         return panel
 
@@ -175,18 +181,25 @@ class ConversionMainPanel(QWidget):
         panel = SectionPanel("输出", object_name="outputPanel", parent=self)
         grid = OptionGrid(parent=panel)
 
+        output_kind = QComboBox(panel)
+        output_kind.setObjectName("outputKindCombo")
+        output_kind.addItems(["单个 .tex", "目录化项目"])
+        self.output_kind_combo = output_kind
+        grid.add_row("输出形式", output_kind)
+
         output_dir = QLineEdit(panel)
         output_dir.setObjectName("outputDirectoryField")
-        output_dir.setPlaceholderText("选择产物目录")
+        output_dir.setPlaceholderText("选择输出目标")
         output_dir.setReadOnly(True)
         self.output_directory_field = output_dir
         browse = self._make_icon_button(
             "outputBrowseButton",
             QStyle.StandardPixmap.SP_DirOpenIcon,
-            "浏览产物目录",
+            "浏览输出目标",
         )
         self.output_browse_button = browse
-        grid.add_row("产物目录", InlineField(output_dir, browse, parent=panel))
+        self.output_target_label = "输出目标"
+        grid.add_row("输出目标", InlineField(output_dir, browse, parent=panel))
 
         overwrite = QCheckBox("覆盖前确认", panel)
         overwrite.setObjectName("confirmOverwriteCheckBox")
@@ -195,31 +208,6 @@ class ConversionMainPanel(QWidget):
         grid.add_row("写盘策略", overwrite)
 
         panel.body_layout.addWidget(grid)
-        return panel
-
-    def _create_mode_panel(self) -> SectionPanel:
-        panel = SectionPanel("转换模式", object_name="modePanel", parent=self)
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(16)
-
-        self._mode_group = QButtonGroup(panel)
-        for index, (name, text, mode) in enumerate(
-            [
-                ("singleFileModeRadio", "单文件 .tex", GuiConversionMode.single_file),
-                ("projectModeRadio", "目录化项目", GuiConversionMode.project),
-                ("batchModeRadio", "批量任务", GuiConversionMode.batch),
-            ]
-        ):
-            radio = QRadioButton(text, panel)
-            radio.setObjectName(name)
-            radio.setProperty("conversionMode", mode.value)
-            radio.setChecked(index == 0)
-            self._mode_group.addButton(radio, index)
-            layout.addWidget(radio)
-
-        layout.addStretch(1)
-        panel.body_layout.addLayout(layout)
         return panel
 
     def _create_page_document_panel(self) -> SectionPanel:
@@ -483,10 +471,18 @@ class ConversionMainPanel(QWidget):
         metrics.setContentsMargins(0, 0, 0, 0)
         metrics.setHorizontalSpacing(8)
         metrics.setVerticalSpacing(8)
-        for index, (label, value) in enumerate(
-            [("待处理", "0"), ("运行中", "0"), ("完成", "0"), ("失败", "0")]
+        self.task_metric_labels = {}
+        for index, (label, value, key) in enumerate(
+            [
+                ("待处理", "0", GuiTaskStatus.pending),
+                ("运行中", "0", GuiTaskStatus.running),
+                ("完成", "0", GuiTaskStatus.completed),
+                ("失败", "0", GuiTaskStatus.failed),
+            ]
         ):
-            metrics.addWidget(MetricPill(label, value, parent=panel), index // 2, index % 2)
+            metric = MetricPill(label, value, parent=panel)
+            self.task_metric_labels[key] = metric.findChildren(QLabel)[0]
+            metrics.addWidget(metric, index // 2, index % 2)
         panel.body_layout.addLayout(metrics)
 
         body = QWidget(panel)
@@ -570,7 +566,9 @@ class ConversionMainPanel(QWidget):
         self.output_browse_button.clicked.connect(self._browse_output_directory)
         self.cache_browse_button.clicked.connect(self._browse_cache_directory)
         self.input_type_combo.currentTextChanged.connect(self._change_input_kind)
-        self._mode_group.idClicked.connect(self._sync_mode_from_radio)
+        self.output_kind_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.batch_pattern_field.textChanged.connect(self._sync_gui_state)
+        self.add_task_button.clicked.connect(self.add_current_tasks)
         self.title_source_combo.currentTextChanged.connect(self._sync_gui_state)
         self.structure_mode_combo.currentTextChanged.connect(self._sync_gui_state)
         self.document_class_combo.currentTextChanged.connect(self._sync_gui_state)
@@ -641,7 +639,18 @@ class ConversionMainPanel(QWidget):
             self.set_input_selection(GuiInputSelection.from_directory(directory))
 
     def _browse_output_directory(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "选择产物目录", "")
+        if self._current_input_kind() == GuiInputKind.single_file and self._current_output_kind() == GuiOutputKind.tex_file:
+            path, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "选择输出 .tex 文件",
+                "",
+                "LaTeX 文件 (*.tex)",
+            )
+            if path:
+                self.set_output_directory(path)
+            return
+
+        directory = QFileDialog.getExistingDirectory(self, "选择输出目录", "")
         if directory:
             self.set_output_directory(directory)
 
@@ -700,32 +709,23 @@ class ConversionMainPanel(QWidget):
         return input_kind_from_label(self.input_type_combo.currentText())
 
     def _current_conversion_mode(self) -> GuiConversionMode:
-        button = self._mode_group.checkedButton()
-        if button is None:
-            return GuiConversionMode.single_file
-        return GuiConversionMode(button.property("conversionMode"))
+        return self._current_output_kind()
 
-    def _sync_mode_from_radio(self, button_id: int) -> None:
-        button = self._mode_group.button(button_id)
-        if button is None:
-            return
-        mode = GuiConversionMode(button.property("conversionMode"))
-        self._set_conversion_mode(mode)
+    def _current_output_kind(self) -> GuiOutputKind:
+        if self.output_kind_combo.currentText() == "目录化项目":
+            return GuiOutputKind.project
+        return GuiOutputKind.tex_file
 
     def _set_conversion_mode(self, mode: GuiConversionMode) -> None:
-        for button in self._mode_group.buttons():
-            if button.property("conversionMode") == mode.value:
-                button.setChecked(True)
-                break
+        self.output_kind_combo.setCurrentText("目录化项目" if mode == GuiOutputKind.project else "单个 .tex")
         self._sync_gui_state()
 
     def _refresh_mode_controls(self) -> None:
-        if self._current_conversion_mode() == GuiConversionMode.batch:
-            self.batch_workers_spin_box.setEnabled(True)
-        else:
-            self.batch_workers_spin_box.setEnabled(False)
+        batch_input = self._current_input_kind() != GuiInputKind.single_file
+        self.batch_workers_spin_box.setEnabled(batch_input)
+        self.batch_pattern_field.setEnabled(self._current_input_kind() == GuiInputKind.directory)
 
-        project_mode = self._current_conversion_mode() == GuiConversionMode.project
+        project_mode = self._current_output_kind() == GuiOutputKind.project
         self.structure_mode_combo.setEnabled(project_mode)
         self.structure_chunk_pages_spin_box.setEnabled(project_mode)
         self.structure_max_pages_spin_box.setEnabled(project_mode)
@@ -751,21 +751,24 @@ class ConversionMainPanel(QWidget):
     def _refresh_action_state(self) -> None:
         settings = self.current_settings()
         self.add_task_button.setEnabled(self.selection_state.can_add_task and not validate_gui_settings(settings))
-        self.manual_title_field.setEnabled(self.title_source_combo.currentText() != "llm")
+        single_input = self._current_input_kind() == GuiInputKind.single_file
+        self.manual_title_field.setEnabled(single_input and self.title_source_combo.currentText() != "llm")
         self.show_date_checkbox.setEnabled(True)
         self.beamer_title_page_checkbox.setEnabled(self.document_class_combo.currentText() in {"beamer", "ctexbeamer"})
 
-        project_mode = self._current_conversion_mode() == GuiConversionMode.project
+        project_mode = self._current_output_kind() == GuiOutputKind.project
         self.structure_mode_combo.setEnabled(project_mode)
         self.structure_chunk_pages_spin_box.setEnabled(project_mode)
         self.structure_max_pages_spin_box.setEnabled(project_mode)
-        self.batch_workers_spin_box.setEnabled(self._current_conversion_mode() == GuiConversionMode.batch)
+        self.batch_workers_spin_box.setEnabled(self._current_input_kind() != GuiInputKind.single_file)
+        self.batch_pattern_field.setEnabled(self._current_input_kind() == GuiInputKind.directory)
 
     def current_settings(self) -> GuiConversionSettings:
         return GuiConversionSettings(
             path_state=self.selection_state,
-            conversion_mode=self._current_conversion_mode(),
+            output_kind=self._current_output_kind(),
             confirm_overwrite=self.confirm_overwrite_checkbox.isChecked(),
+            batch_pattern=self.batch_pattern_field.text(),
             pages=self.pages_field.text(),
             document_class=self.document_class_combo.currentText(),
             structure_mode=self.structure_mode_combo.currentText(),
@@ -805,7 +808,9 @@ class ConversionMainPanel(QWidget):
 
     def set_settings(self, settings: GuiConversionSettings) -> None:
         self.selection_state = settings.path_state
+        self.output_kind_combo.setCurrentText("目录化项目" if settings.output_kind == GuiOutputKind.project else "单个 .tex")
         self.confirm_overwrite_checkbox.setChecked(settings.confirm_overwrite)
+        self.batch_pattern_field.setText(settings.batch_pattern)
         self.pages_field.setText(settings.pages)
         self.document_class_combo.setCurrentText(settings.document_class)
         self.structure_mode_combo.setCurrentText(settings.structure_mode)
@@ -843,7 +848,6 @@ class ConversionMainPanel(QWidget):
         self.ctex_font_profile_combo.setCurrentText(settings.ctex_font_profile)
         self._sync_cache_controls()
         self._sync_image_controls()
-        self._set_conversion_mode(settings.conversion_mode)
         self._refresh_path_state()
 
     def reset_settings(self) -> None:
@@ -851,3 +855,25 @@ class ConversionMainPanel(QWidget):
 
     def validate_settings(self) -> list[str]:
         return validate_gui_settings(self.current_settings())
+
+    def add_current_tasks(self) -> None:
+        """Create pending in-memory tasks from current settings."""
+        try:
+            new_tasks = create_conversion_tasks(self.current_settings())
+        except GuiTaskCreationError as exc:
+            self._publish_status_message(str(exc))
+            return
+        self.tasks.extend(new_tasks)
+        self._refresh_task_summary()
+        self._publish_status_message(f"已添加 {len(new_tasks)} 个待处理任务")
+
+    def _refresh_task_summary(self) -> None:
+        counts = {status: 0 for status in GuiTaskStatus}
+        for task in self.tasks:
+            counts[task.status] += 1
+        for status, label in self.task_metric_labels.items():
+            label.setText(str(counts[status]))
+        empty_status = self.findChild(QLabel, "taskEmptyStatusLabel")
+        if empty_status is not None:
+            total = len(self.tasks)
+            empty_status.setText("队列空闲" if total == 0 else f"已创建 {total} 个任务")
