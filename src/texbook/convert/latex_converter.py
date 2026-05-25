@@ -13,6 +13,7 @@ from ..output_options import (
     DEFAULT_OUTPUT_OPTIONS,
     LatexOutputOptions,
 )
+from ..latex_text import normalize_latex_fragment_newlines
 
 
 _DOCUMENTCLASS_RE = re.compile(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}")
@@ -289,7 +290,7 @@ class LatexConverter:
 
     def clean_body_fragment(self, fragment: str) -> str:
         """Strip complete-document wrappers from a trusted body fragment."""
-        text = fragment.strip()
+        text = normalize_latex_fragment_newlines(fragment)
         text = _DOCUMENTCLASS_RE.sub("", text)
         text = _USEPACKAGE_RE.sub("", text)
         text = text.replace(r"\begin{document}", "")

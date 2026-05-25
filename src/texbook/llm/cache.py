@@ -12,6 +12,7 @@ from typing import Any, Sequence
 
 from ..document_class import DocumentClassResult, LatexDocumentClass
 from ..extract.base import ImageRenderOptions, PdfDocumentChunk, PdfPageContext
+from ..latex_text import normalize_latex_fragment_newlines
 from ..output_options import DEFAULT_OUTPUT_OPTIONS, LatexOutputOptions
 from ..structure import (
     StructureEvidence,
@@ -19,7 +20,11 @@ from ..structure import (
     StructurePlannerOptions,
     plan_hash_payload,
 )
-from .client import LLMChunkResult, LLMDocumentClassResult, LLMStructurePlanResult
+from .client import (
+    LLMChunkResult,
+    LLMDocumentClassResult,
+    LLMStructurePlanResult,
+)
 from .prompts import DOCUMENT_CLASS_SYSTEM_PROMPT, STRUCTURE_SYSTEM_PROMPT
 from .presets import PromptPreset, default_prompt_preset
 
@@ -128,7 +133,7 @@ class ChunkCacheRun:
             return None
 
         return LLMChunkResult(
-            latex=latex,
+            latex=normalize_latex_fragment_newlines(latex),
             notes=[str(note) for note in notes if str(note).strip()],
         )
 

@@ -34,6 +34,14 @@ def test_parse_chunk_response_accepts_fenced_json():
     assert result.notes == ["ignored footer removed"]
 
 
+def test_parse_chunk_response_restores_literal_newline_escapes():
+    result = parse_chunk_response(
+        '{"latex": "\\\\begin{frame}\\\\n  % TODO: figure pending_asset\\\\n\\\\end{frame}", "notes": []}'
+    )
+
+    assert result.latex == "\\begin{frame}\n  % TODO: figure pending_asset\n\\end{frame}"
+
+
 def test_parse_chunk_response_rejects_missing_latex():
     try:
         parse_chunk_response('{"notes": []}')

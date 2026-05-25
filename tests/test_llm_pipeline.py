@@ -538,6 +538,34 @@ def test_pipeline_can_build_project_output():
     assert all(page.image_base64 is None for chunk in extractor.chunks for page in chunk.pages)
 
 
+def test_pipeline_normalizes_literal_newline_escapes_in_project_output():
+    pages = [PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1")]
+    extractor = FakeExtractor(pages)
+    client = FakeClient(
+        latex_fragments=[
+            r"\begin{frame}\n  % TODO: figure pending_asset: logo\n\end{frame}",
+        ]
+    )
+    converter = LLMPdfConverter(
+        client,
+        extractor=extractor,
+        chunk_pages=1,
+        structure_options=StructurePlannerOptions(mode=StructureMode.off),
+        document_class=DocumentClassMode.ctexbeamer,
+        output_options=LatexOutputOptions(
+            beamer_box_style=BeamerBoxStyle.tcolorbox,
+            beamer_title_page=False,
+        ),
+    )
+
+    project = converter.convert_project(Path("docs/sample.pdf"))
+    chapter = project.files[PurePosixPath("chapters/chapter01.tex")]
+
+    assert chapter == (
+        "\\begin{frame}\n  % TODO: figure pending_asset: logo\n\\end{frame}\n"
+    )
+
+
 def test_pipeline_can_disable_beamer_title_page_in_project_output():
     pages = [
         PdfPageContext(page_number=1, width=1, height=1, image_base64="page-1"),
@@ -1084,6 +1112,29 @@ def test_pipeline_reuses_chunk_cache_after_successful_run(tmp_path):
     assert "second-cached" in second_result.latex
     assert second_extractor.calls[0]["chunk_size"] == 1
     assert all(page.image_base64 is None for chunk in second_extractor.chunks for page in chunk.pages)
+
+
+def test_chunk_cache_restores_literal_newline_escapes(tmp_path):
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"sample-pdf-bytes")
+    page = _page(1, image_base64="page-1")
+    cache_run = _build_cache_run(
+        tmp_path,
+        pages=[1],
+        document_title="sample",
+        chunk_pages=1,
+    )
+    chunk = _chunk(1, page)
+    cache_run.write(
+        chunk,
+        "",
+        type("Result", (), {"latex": r"\begin{frame}\n\end{frame}", "notes": []})(),
+    )
+
+    restored = cache_run.read(chunk, "")
+
+    assert restored is not None
+    assert restored.latex == "\\begin{frame}\n\\end{frame}"
 
 
 def test_pipeline_reuses_chunk_cache_when_llm_title_falls_back(tmp_path):

@@ -127,6 +127,18 @@ def test_clean_body_fragment_replaces_unsupported_graphics_reference():
     assert "missing.png" in cleaned
 
 
+def test_clean_body_fragment_restores_literal_newline_escapes():
+    converter = LatexConverter(document_class=LatexDocumentClass.ctexbeamer)
+
+    cleaned = converter.clean_body_fragment(
+        r"\begin{frame}\n  % TODO: figure pending_asset: logo\n\end{frame}"
+    )
+
+    assert cleaned == (
+        "\\begin{frame}\n  % TODO: figure pending_asset: logo\n\\end{frame}"
+    )
+
+
 def test_complex_content_candidate_metadata_roundtrip():
     candidate = ComplexContentCandidate(
         kind=ComplexContentKind.figure,

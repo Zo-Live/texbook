@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence
 
 import httpx
 
+from ..latex_text import normalize_latex_fragment_newlines
 from ..document_class import (
     DocumentClassResult,
     LatexDocumentClass,
@@ -300,7 +301,10 @@ def parse_chunk_response(raw_content: str) -> LLMChunkResult:
     else:
         notes = [str(notes_value)]
 
-    return LLMChunkResult(latex=latex.strip(), notes=notes)
+    return LLMChunkResult(
+        latex=normalize_latex_fragment_newlines(latex),
+        notes=notes,
+    )
 
 
 def parse_document_class_response(raw_content: str) -> LLMDocumentClassResult:
