@@ -12,8 +12,10 @@ from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QCheckBox,
     QComboBox,
+    QLabel,
     QLineEdit,
     QMainWindow,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QToolButton,
@@ -33,7 +35,18 @@ from texbook.gui.resources import (  # noqa: E402
 )
 from texbook.gui.selection import GuiInputKind, GuiInputSelection, GuiPathSelectionState  # noqa: E402
 from texbook.gui.settings import GuiConversionMode, GuiConversionSettings, GuiOutputKind  # noqa: E402
-from texbook.gui.tasks import GuiTaskStatus, create_conversion_tasks  # noqa: E402
+from texbook.gui.tasks import (  # noqa: E402
+    GuiTaskRuntimeUpdate,
+    GuiTaskStage,
+    GuiTaskStatus,
+    apply_progress_event,
+    create_task_view_state,
+    create_conversion_tasks,
+    mark_task_completed,
+    mark_task_failed,
+    mark_task_running,
+)
+from texbook.llm.scheduler import ProgressEvent  # noqa: E402
 from texbook.output_options import BeamerBoxStyle, CtexFontProfile  # noqa: E402
 from texbook.structure import StructureMode  # noqa: E402
 
@@ -159,6 +172,8 @@ def test_conversion_panel_exposes_future_task_control_points():
         "ctexFontProfileCombo",
         "overallProgressBar",
         "taskEmptyStatusLabel",
+        "taskListScrollArea",
+        "taskRowsContainer",
     ]:
         assert panel.findChild(QWidget, object_name) is not None
 
@@ -605,6 +620,157 @@ def test_create_tasks_for_single_file_tex_and_project(monkeypatch):
     assert project_task.output_target.kind == GuiOutputKind.project
     assert project_task.output_target.path == Path("out/lecture")
     assert tex_task.status == GuiTaskStatus.pending
+
+
+def test_task_view_state_tracks_runtime_updates_and_progress_events(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    task = create_conversion_tasks(
+        GuiConversionSettings(
+            path_state=GuiPathSelectionState(
+                input_selection=GuiInputSelection.from_single_file("lecture.pdf"),
+                output_directory="out/lecture",
+            )
+        ),
+        repo_root=ROOT,
+    )[0]
+
+    state = create_task_view_state(task)
+    assert state.status == GuiTaskStatus.pending
+    assert state.stage == GuiTaskStage.waiting
+    assert state.progress == 0
+
+    mark_task_running(state)
+    assert state.status == GuiTaskStatus.running
+    assert state.progress == 5
+
+    apply_progress_event(
+        state,
+        ProgressEvent(kind="stage_started", operation="chunk", label="chunk 1/2"),
+    )
+    assert state.stage == GuiTaskStage.chunk
+    assert state.progress == 45
+
+    apply_progress_event(
+        state,
+        ProgressEvent(
+            kind="cache_hit",
+            operation="chunk",
+            label="chunk 1/2",
+            metadata={"chunk_index": 1, "total_chunks": 2},
+        ),
+    )
+    assert state.cache_hits == 1
+
+    apply_progress_event(
+        state,
+        ProgressEvent(
+            kind="retry_scheduled",
+            operation="chunk",
+            label="chunk 2/2",
+            delay=0.5,
+            error="timeout",
+        ),
+    )
+    assert state.retries == 1
+
+    apply_progress_event(
+        state,
+        ProgressEvent(
+            kind="stage_completed",
+            operation="chunk",
+            label="chunk 2/2",
+            metadata={"chunk_index": 2, "total_chunks": 2},
+        ),
+    )
+    assert state.progress == 85
+
+    mark_task_completed(state, result="out/lecture.tex", notes=("完成",))
+    assert state.status == GuiTaskStatus.completed
+    assert state.progress == 100
+    assert state.result == "out/lecture.tex"
+
+    mark_task_failed(state, "LLM failed")
+    assert state.status == GuiTaskStatus.failed
+    assert state.stage == GuiTaskStage.failed
+    assert state.error == "LLM failed"
+
+
+def test_conversion_panel_adds_visual_task_rows_and_updates_progress(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+
+    panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
+    panel.set_output_directory("out")
+    panel.findChild(QPushButton, "addTaskButton").click()
+
+    states = panel.task_view_states()
+    assert len(states) == 2
+    assert panel.findChild(QWidget, f"taskRow_{states[0].task_id}") is not None
+    assert panel.findChild(QLabel, f"taskStatusBadge_{states[0].task_id}").text() == "待处理"
+    assert panel.findChild(QLabel, f"taskStageLabel_{states[0].task_id}").text() == "阶段：等待中"
+    assert panel.findChild(QLabel, f"taskCacheLabel_{states[0].task_id}").text() == "缓存命中 0"
+    assert panel.findChild(QLabel, f"taskRetryLabel_{states[0].task_id}").text() == "重试 0"
+    assert panel.findChild(QLabel, "taskEmptyStatusLabel").text() == "已创建 2 个任务"
+    assert panel.findChild(QPushButton, "startButton").isEnabled() is True
+
+    first_id = states[0].task_id
+    panel.handle_task_progress(
+        first_id,
+        ProgressEvent(
+            kind="stage_completed",
+            operation="chunk",
+            label="chunk 1/2",
+            metadata={"chunk_index": 1, "total_chunks": 2},
+        ),
+    )
+    panel.handle_task_progress(
+        first_id,
+        ProgressEvent(kind="cache_hit", operation="chunk", label="chunk 1/2"),
+    )
+    panel.update_task_state(
+        first_id,
+        GuiTaskRuntimeUpdate(status=GuiTaskStatus.completed, stage=GuiTaskStage.completed, progress=100, result="out/a.tex"),
+    )
+
+    assert panel.findChild(QLabel, f"taskStatusBadge_{first_id}").text() == "完成"
+    assert panel.findChild(QLabel, f"taskCacheLabel_{first_id}").text() == "缓存命中 1"
+    assert panel.findChild(QLabel, f"taskResultLabel_{first_id}").text() == "完成结果：out/a.tex"
+    assert panel.findChild(QProgressBar, "overallProgressBar").value() == 50
+
+    panel.update_task_state(
+        states[1].task_id,
+        GuiTaskRuntimeUpdate(status=GuiTaskStatus.failed, stage=GuiTaskStage.failed, progress=40, error="LLM failed"),
+    )
+    assert panel.findChild(QLabel, f"taskStatusBadge_{states[1].task_id}").text() == "失败"
+    assert panel.findChild(QLabel, f"taskResultLabel_{states[1].task_id}").text() == "失败原因：LLM failed"
+    assert panel.findChild(QProgressBar, "overallProgressBar").value() == 70
+
+    window.close()
+    app.quit()
+
+
+def test_conversion_panel_start_button_only_reports_future_execution(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+
+    panel.set_input_selection(GuiInputSelection.from_single_file("lecture.pdf"))
+    panel.set_output_directory("out/lecture")
+    panel.findChild(QPushButton, "addTaskButton").click()
+    panel.findChild(QPushButton, "startButton").click()
+
+    assert window.statusBar().currentMessage() == "后台执行将在后续阶段接入。"
+
+    window.close()
+    app.quit()
 
 
 def test_create_tasks_supports_multiple_pdf_project_output(monkeypatch):

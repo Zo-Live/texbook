@@ -39,8 +39,18 @@ from texbook.gui.settings import (
     GuiConversionSettings,
     validate_gui_settings,
 )
-from texbook.gui.tasks import GuiTaskCreationError, GuiTaskStatus, create_conversion_tasks
+from texbook.gui.tasks import (
+    GuiTaskCreationError,
+    GuiTaskRuntimeUpdate,
+    GuiTaskStatus,
+    GuiTaskViewState,
+    apply_progress_event,
+    apply_task_update,
+    create_conversion_tasks,
+    create_task_view_state,
+)
 from texbook.gui.widgets import InlineField, MetricPill, OptionGrid, SectionPanel
+from texbook.llm.scheduler import ProgressEvent
 
 
 class ConversionMainPanel(QWidget):
@@ -51,6 +61,8 @@ class ConversionMainPanel(QWidget):
         self.setObjectName("conversionMainPanel")
         self.selection_state = GuiPathSelectionState()
         self.tasks = []
+        self._task_states: dict[str, GuiTaskViewState] = {}
+        self._task_rows: dict[str, QFrame] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 18)
@@ -108,6 +120,7 @@ class ConversionMainPanel(QWidget):
         start.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         start.setToolTip("任务执行流程将在后续阶段接入。")
         start.setEnabled(False)
+        self.start_button = start
         layout.addWidget(start)
 
         return command_bar
@@ -490,6 +503,7 @@ class ConversionMainPanel(QWidget):
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(10)
+        self.task_list_body_layout = body_layout
 
         empty = QFrame(body)
         empty.setObjectName("taskEmptyState")
@@ -512,14 +526,35 @@ class ConversionMainPanel(QWidget):
         status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status.setProperty("muted", True)
         empty_layout.addWidget(status)
+        self.task_empty_state = empty
 
         body_layout.addWidget(empty)
+
+        scroll = QScrollArea(body)
+        scroll.setObjectName("taskListScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVisible(False)
+        self.task_list_scroll_area = scroll
+
+        rows = QWidget(scroll)
+        rows.setObjectName("taskRowsContainer")
+        rows_layout = QVBoxLayout(rows)
+        rows_layout.setContentsMargins(0, 0, 0, 0)
+        rows_layout.setSpacing(8)
+        rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.task_rows_container = rows
+        self.task_rows_layout = rows_layout
+        scroll.setWidget(rows)
+        body_layout.addWidget(scroll, 1)
 
         progress = QProgressBar(body)
         progress.setObjectName("overallProgressBar")
         progress.setRange(0, 100)
         progress.setValue(0)
         progress.setTextVisible(False)
+        self.overall_progress_bar = progress
         body_layout.addWidget(progress)
         body_layout.addStretch(1)
 
@@ -569,6 +604,7 @@ class ConversionMainPanel(QWidget):
         self.output_kind_combo.currentTextChanged.connect(self._sync_gui_state)
         self.batch_pattern_field.textChanged.connect(self._sync_gui_state)
         self.add_task_button.clicked.connect(self.add_current_tasks)
+        self.start_button.clicked.connect(self._notify_execution_pending)
         self.title_source_combo.currentTextChanged.connect(self._sync_gui_state)
         self.structure_mode_combo.currentTextChanged.connect(self._sync_gui_state)
         self.document_class_combo.currentTextChanged.connect(self._sync_gui_state)
@@ -751,6 +787,7 @@ class ConversionMainPanel(QWidget):
     def _refresh_action_state(self) -> None:
         settings = self.current_settings()
         self.add_task_button.setEnabled(self.selection_state.can_add_task and not validate_gui_settings(settings))
+        self.start_button.setEnabled(any(state.status == GuiTaskStatus.pending for state in self._task_states.values()))
         single_input = self._current_input_kind() == GuiInputKind.single_file
         self.manual_title_field.setEnabled(single_input and self.title_source_combo.currentText() != "llm")
         self.show_date_checkbox.setEnabled(True)
@@ -864,16 +901,190 @@ class ConversionMainPanel(QWidget):
             self._publish_status_message(str(exc))
             return
         self.tasks.extend(new_tasks)
+        for task in new_tasks:
+            self._task_states[task.task_id] = create_task_view_state(task)
         self._refresh_task_summary()
         self._publish_status_message(f"已添加 {len(new_tasks)} 个待处理任务")
 
+    def task_view_states(self) -> tuple[GuiTaskViewState, ...]:
+        """Return current task display states in queue order."""
+        return tuple(
+            self._task_states[task.task_id]
+            for task in self.tasks
+            if task.task_id in self._task_states
+        )
+
+    def update_task_state(self, task_id: str, update: GuiTaskRuntimeUpdate) -> None:
+        """Apply a display update to one queued task."""
+        state = self._task_states.get(task_id)
+        if state is None:
+            raise ValueError(f"未知任务：{task_id}")
+        apply_task_update(state, update)
+        self._refresh_task_summary()
+
+    def handle_task_progress(self, task_id: str, event: ProgressEvent) -> None:
+        """Merge one core progress event into one queued task."""
+        state = self._task_states.get(task_id)
+        if state is None:
+            raise ValueError(f"未知任务：{task_id}")
+        apply_progress_event(state, event)
+        self._refresh_task_summary()
+
     def _refresh_task_summary(self) -> None:
         counts = {status: 0 for status in GuiTaskStatus}
-        for task in self.tasks:
-            counts[task.status] += 1
+        states = list(self.task_view_states())
+        for state in states:
+            counts[state.status] += 1
         for status, label in self.task_metric_labels.items():
             label.setText(str(counts[status]))
         empty_status = self.findChild(QLabel, "taskEmptyStatusLabel")
         if empty_status is not None:
-            total = len(self.tasks)
+            total = len(states)
             empty_status.setText("队列空闲" if total == 0 else f"已创建 {total} 个任务")
+        self._refresh_task_rows(states)
+        self._refresh_overall_progress(states)
+        self._refresh_action_state()
+
+    def _refresh_task_rows(self, states: list[GuiTaskViewState]) -> None:
+        active_ids = {state.task_id for state in states}
+        for task_id, row in list(self._task_rows.items()):
+            if task_id not in active_ids:
+                self.task_rows_layout.removeWidget(row)
+                row.deleteLater()
+                del self._task_rows[task_id]
+
+        for state in states:
+            row = self._task_rows.get(state.task_id)
+            if row is None:
+                row = self._create_task_row(state)
+                self._task_rows[state.task_id] = row
+                self.task_rows_layout.addWidget(row)
+            self._update_task_row(row, state)
+
+        has_tasks = bool(states)
+        self.task_empty_state.setVisible(not has_tasks)
+        self.task_list_scroll_area.setVisible(has_tasks)
+
+    def _create_task_row(self, state: GuiTaskViewState) -> QFrame:
+        row = QFrame(self.task_rows_container)
+        row.setObjectName(f"taskRow_{state.task_id}")
+        row.setProperty("taskRow", True)
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
+
+        title = QLabel(state.label, row)
+        title.setObjectName(f"taskTitleLabel_{state.task_id}")
+        title.setProperty("sectionTitle", True)
+        title.setWordWrap(True)
+        header.addWidget(title, 1)
+
+        status = QLabel(row)
+        status.setObjectName(f"taskStatusBadge_{state.task_id}")
+        status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        status.setProperty("taskStatus", state.status.value)
+        header.addWidget(status)
+        layout.addLayout(header)
+
+        target = QLabel(row)
+        target.setObjectName(f"taskTargetLabel_{state.task_id}")
+        target.setProperty("muted", True)
+        target.setWordWrap(True)
+        layout.addWidget(target)
+
+        stage = QLabel(row)
+        stage.setObjectName(f"taskStageLabel_{state.task_id}")
+        stage.setProperty("muted", True)
+        stage.setWordWrap(True)
+        layout.addWidget(stage)
+
+        progress = QProgressBar(row)
+        progress.setObjectName(f"taskProgressBar_{state.task_id}")
+        progress.setRange(0, 100)
+        progress.setTextVisible(True)
+        layout.addWidget(progress)
+
+        metrics = QHBoxLayout()
+        metrics.setContentsMargins(0, 0, 0, 0)
+        metrics.setSpacing(10)
+        cache = QLabel(row)
+        cache.setObjectName(f"taskCacheLabel_{state.task_id}")
+        cache.setProperty("muted", True)
+        metrics.addWidget(cache)
+        retry = QLabel(row)
+        retry.setObjectName(f"taskRetryLabel_{state.task_id}")
+        retry.setProperty("muted", True)
+        metrics.addWidget(retry)
+        metrics.addStretch(1)
+        layout.addLayout(metrics)
+
+        result = QLabel(row)
+        result.setObjectName(f"taskResultLabel_{state.task_id}")
+        result.setProperty("muted", True)
+        result.setWordWrap(True)
+        layout.addWidget(result)
+
+        return row
+
+    def _update_task_row(self, row: QFrame, state: GuiTaskViewState) -> None:
+        status = row.findChild(QLabel, f"taskStatusBadge_{state.task_id}")
+        if status is not None:
+            status.setText(state.status_label)
+            status.setProperty("taskStatus", state.status.value)
+            status.style().unpolish(status)
+            status.style().polish(status)
+
+        target = row.findChild(QLabel, f"taskTargetLabel_{state.task_id}")
+        if target is not None:
+            target.setText(self._task_target_text(state))
+
+        stage = row.findChild(QLabel, f"taskStageLabel_{state.task_id}")
+        if stage is not None:
+            detail = f"阶段：{state.stage_label}"
+            if state.recent_event:
+                detail = f"{detail} · {state.recent_event}"
+            stage.setText(detail)
+
+        progress = row.findChild(QProgressBar, f"taskProgressBar_{state.task_id}")
+        if progress is not None:
+            progress.setValue(state.progress)
+            progress.setFormat(f"{state.progress}%")
+
+        cache = row.findChild(QLabel, f"taskCacheLabel_{state.task_id}")
+        if cache is not None:
+            cache.setText(f"缓存命中 {state.cache_hits}")
+
+        retry = row.findChild(QLabel, f"taskRetryLabel_{state.task_id}")
+        if retry is not None:
+            retry.setText(f"重试 {state.retries}")
+
+        result = row.findChild(QLabel, f"taskResultLabel_{state.task_id}")
+        if result is not None:
+            result.setText(self._task_result_text(state))
+
+    def _refresh_overall_progress(self, states: list[GuiTaskViewState]) -> None:
+        if not states:
+            self.overall_progress_bar.setValue(0)
+            return
+        average = round(sum(state.progress for state in states) / len(states))
+        self.overall_progress_bar.setValue(max(0, min(100, average)))
+
+    def _task_target_text(self, state: GuiTaskViewState) -> str:
+        kind = "目录化项目" if state.task.output_target.kind == GuiOutputKind.project else "LaTeX 文件"
+        return f"{kind}：{state.task.output_target.path}"
+
+    def _task_result_text(self, state: GuiTaskViewState) -> str:
+        if state.status == GuiTaskStatus.failed:
+            return f"失败原因：{state.error or '未知错误'}"
+        if state.status == GuiTaskStatus.completed:
+            return f"完成结果：{state.result or state.task.output_target.path}"
+        if state.notes:
+            return "；".join(state.notes)
+        return "等待后台执行"
+
+    def _notify_execution_pending(self) -> None:
+        self._publish_status_message("后台执行将在后续阶段接入。")

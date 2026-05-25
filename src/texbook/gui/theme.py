@@ -37,6 +37,12 @@ def build_fluent_stylesheet() -> str:
         border-radius: 6px;
     }
 
+    QFrame[taskRow="true"] {
+        background: #fbfcfe;
+        border: 1px solid #e1e7ef;
+        border-radius: 8px;
+    }
+
     QLabel#appTitleLabel {
         color: #111827;
         font-size: 20px;
@@ -57,6 +63,38 @@ def build_fluent_stylesheet() -> str:
     QLabel[rowLabel="true"] {
         color: #344054;
         font-weight: 600;
+    }
+
+    QLabel[taskStatus="pending"] {
+        background: #eef2f7;
+        color: #475467;
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-weight: 700;
+    }
+
+    QLabel[taskStatus="running"] {
+        background: #dbeafe;
+        color: #1d4ed8;
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-weight: 700;
+    }
+
+    QLabel[taskStatus="completed"] {
+        background: #dcfce7;
+        color: #166534;
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-weight: 700;
+    }
+
+    QLabel[taskStatus="failed"] {
+        background: #fee2e2;
+        color: #b42318;
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-weight: 700;
     }
 
     QLineEdit,

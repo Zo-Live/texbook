@@ -11,6 +11,7 @@ from uuid import uuid4
 from texbook.gui.core_adapter import GuiCoreConversionBundle, build_core_conversion_bundle
 from texbook.gui.selection import GuiInputKind
 from texbook.gui.settings import GuiConversionSettings, GuiOutputKind
+from texbook.llm.scheduler import ProgressEvent
 
 
 class GuiTaskStatus(str, Enum):
@@ -20,6 +21,40 @@ class GuiTaskStatus(str, Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+
+
+class GuiTaskStage(str, Enum):
+    """User-visible conversion stages tracked by the GUI task list."""
+
+    waiting = "waiting"
+    extracting = "extracting"
+    document_class = "document_class"
+    structure = "structure"
+    chunk = "chunk"
+    title = "title"
+    finalizing = "finalizing"
+    completed = "completed"
+    failed = "failed"
+
+
+TASK_STAGE_LABELS = {
+    GuiTaskStage.waiting: "等待中",
+    GuiTaskStage.extracting: "提取页面",
+    GuiTaskStage.document_class: "判断文档类",
+    GuiTaskStage.structure: "结构规划",
+    GuiTaskStage.chunk: "转换正文",
+    GuiTaskStage.title: "生成标题",
+    GuiTaskStage.finalizing: "收尾",
+    GuiTaskStage.completed: "已完成",
+    GuiTaskStage.failed: "失败",
+}
+
+TASK_STATUS_LABELS = {
+    GuiTaskStatus.pending: "待处理",
+    GuiTaskStatus.running: "运行中",
+    GuiTaskStatus.completed: "完成",
+    GuiTaskStatus.failed: "失败",
+}
 
 
 class GuiTaskCreationError(ValueError):
@@ -46,6 +81,160 @@ class GuiConversionTask:
     status: GuiTaskStatus = GuiTaskStatus.pending
     label: str = ""
     notes: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class GuiTaskRuntimeUpdate:
+    """Partial task state update produced by a future worker or tests."""
+
+    status: GuiTaskStatus | None = None
+    stage: GuiTaskStage | None = None
+    progress: int | None = None
+    cache_hits: int | None = None
+    retries: int | None = None
+    error: str | None = None
+    result: str | None = None
+    notes: tuple[str, ...] | None = None
+    recent_event: str | None = None
+
+
+@dataclass
+class GuiTaskViewState:
+    """Mutable display state for one GUI conversion task."""
+
+    task: GuiConversionTask
+    status: GuiTaskStatus = GuiTaskStatus.pending
+    stage: GuiTaskStage = GuiTaskStage.waiting
+    progress: int = 0
+    cache_hits: int = 0
+    retries: int = 0
+    error: str = ""
+    result: str = ""
+    notes: tuple[str, ...] = field(default_factory=tuple)
+    recent_event: str = ""
+
+    @property
+    def task_id(self) -> str:
+        return self.task.task_id
+
+    @property
+    def label(self) -> str:
+        return self.task.label or _path_name(self.task.source_pdf)
+
+    @property
+    def status_label(self) -> str:
+        return TASK_STATUS_LABELS[self.status]
+
+    @property
+    def stage_label(self) -> str:
+        return TASK_STAGE_LABELS[self.stage]
+
+
+def create_task_view_state(task: GuiConversionTask) -> GuiTaskViewState:
+    """Create the initial visual state for a newly added GUI task."""
+    return GuiTaskViewState(task=task, notes=task.notes)
+
+
+def apply_task_update(
+    state: GuiTaskViewState,
+    update: GuiTaskRuntimeUpdate,
+) -> GuiTaskViewState:
+    """Apply a partial display update to one task state."""
+    if update.status is not None:
+        state.status = update.status
+    if update.stage is not None:
+        state.stage = update.stage
+    if update.progress is not None:
+        state.progress = _clamp_progress(update.progress)
+    if update.cache_hits is not None:
+        state.cache_hits = max(0, update.cache_hits)
+    if update.retries is not None:
+        state.retries = max(0, update.retries)
+    if update.error is not None:
+        state.error = update.error
+    if update.result is not None:
+        state.result = update.result
+    if update.notes is not None:
+        state.notes = update.notes
+    if update.recent_event is not None:
+        state.recent_event = update.recent_event
+    return state
+
+
+def mark_task_running(state: GuiTaskViewState) -> GuiTaskViewState:
+    """Mark a task as running without starting conversion in this layer."""
+    state.status = GuiTaskStatus.running
+    state.progress = max(state.progress, 5)
+    state.recent_event = "任务开始"
+    return state
+
+
+def mark_task_completed(
+    state: GuiTaskViewState,
+    *,
+    result: str = "",
+    notes: Iterable[str] = (),
+) -> GuiTaskViewState:
+    """Mark a task as completed for visual display."""
+    state.status = GuiTaskStatus.completed
+    state.stage = GuiTaskStage.completed
+    state.progress = 100
+    state.error = ""
+    state.result = result or _format_output_target(state.task.output_target)
+    state.notes = tuple(notes)
+    state.recent_event = "任务完成"
+    return state
+
+
+def mark_task_failed(
+    state: GuiTaskViewState,
+    error: str,
+) -> GuiTaskViewState:
+    """Mark a task as failed for visual display."""
+    state.status = GuiTaskStatus.failed
+    state.stage = GuiTaskStage.failed
+    state.error = error
+    state.progress = min(state.progress, 99)
+    state.recent_event = error
+    return state
+
+
+def apply_progress_event(
+    state: GuiTaskViewState,
+    event: ProgressEvent,
+) -> GuiTaskViewState:
+    """Merge one core progress event into a GUI task display state."""
+    state.recent_event = _event_summary(event)
+    if event.kind == "stage_started":
+        state.status = GuiTaskStatus.running
+        state.stage = _stage_for_operation(event.operation)
+        state.progress = max(state.progress, _stage_start_progress(event.operation))
+        return state
+    if event.kind == "stage_completed":
+        state.status = GuiTaskStatus.running
+        state.stage = _stage_for_operation(event.operation)
+        state.progress = max(state.progress, _stage_completed_progress(event.operation, event))
+        return state
+    if event.kind == "cache_hit":
+        state.status = GuiTaskStatus.running
+        state.cache_hits += 1
+        state.progress = max(state.progress, _stage_start_progress(event.operation))
+        return state
+    if event.kind == "retry_scheduled":
+        state.status = GuiTaskStatus.running
+        state.retries += 1
+        return state
+    if event.kind == "request_started":
+        state.status = GuiTaskStatus.running
+        state.progress = max(state.progress, _stage_start_progress(event.operation))
+        return state
+    if event.kind == "request_failed":
+        return mark_task_failed(state, event.error or "请求失败")
+    if event.kind == "request_completed":
+        state.status = GuiTaskStatus.running
+        state.progress = max(state.progress, _stage_completed_progress(event.operation, event))
+        return state
+    return state
 
 
 def create_conversion_tasks(
@@ -200,3 +389,87 @@ def _path_stem(path: Path) -> str:
 
 def _path_name(path: Path) -> str:
     return PureWindowsPath(str(path)).name
+
+
+def _format_output_target(target: GuiOutputTarget) -> str:
+    suffix = "项目" if target.kind == GuiOutputKind.project else "LaTeX"
+    return f"{suffix}：{target.path}"
+
+
+def _clamp_progress(value: int) -> int:
+    return max(0, min(100, int(value)))
+
+
+def _stage_for_operation(operation: str) -> GuiTaskStage:
+    if operation == "extract":
+        return GuiTaskStage.extracting
+    if operation == "document_class":
+        return GuiTaskStage.document_class
+    if operation == "structure":
+        return GuiTaskStage.structure
+    if operation == "chunk":
+        return GuiTaskStage.chunk
+    if operation == "title":
+        return GuiTaskStage.title
+    if operation == "conversion":
+        return GuiTaskStage.finalizing
+    return GuiTaskStage.finalizing
+
+
+def _stage_start_progress(operation: str) -> int:
+    return {
+        "conversion": 5,
+        "extract": 12,
+        "document_class": 22,
+        "structure": 35,
+        "chunk": 45,
+        "title": 90,
+    }.get(operation, 10)
+
+
+def _stage_completed_progress(operation: str, event: ProgressEvent) -> int:
+    if operation == "conversion":
+        return 95
+    if operation == "extract":
+        return 20
+    if operation == "document_class":
+        return 32
+    if operation == "structure":
+        return 42
+    if operation == "title":
+        return 95
+    if operation == "chunk":
+        chunk_index = _metadata_int(event, "chunk_index")
+        total_chunks = _metadata_int(event, "total_chunks")
+        if chunk_index is not None and total_chunks:
+            return _clamp_progress(45 + round(40 * chunk_index / total_chunks))
+        return 75
+    return _stage_start_progress(operation)
+
+
+def _metadata_int(event: ProgressEvent, key: str) -> int | None:
+    value = event.metadata.get(key)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _event_summary(event: ProgressEvent) -> str:
+    label = event.label or event.operation
+    if event.kind == "stage_started":
+        return f"开始：{label}"
+    if event.kind == "stage_completed":
+        return f"完成：{label}"
+    if event.kind == "cache_hit":
+        return f"缓存命中：{label}"
+    if event.kind == "retry_scheduled":
+        delay = event.delay or 0.0
+        return f"重试：{label}，{delay:.1f}s 后再次请求"
+    if event.kind == "request_started":
+        return f"请求：{label}"
+    if event.kind == "request_completed":
+        return f"请求完成：{label}"
+    if event.kind == "request_failed":
+        return f"失败：{label}"
+    return label
