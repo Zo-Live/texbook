@@ -81,6 +81,22 @@ def build_fluent_stylesheet() -> str:
         font-weight: 700;
     }
 
+    QLabel[taskStatus="canceling"] {
+        background: #fef3c7;
+        color: #92400e;
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-weight: 700;
+    }
+
+    QLabel[taskStatus="canceled"] {
+        background: #f3f4f6;
+        color: #4b5563;
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-weight: 700;
+    }
+
     QLabel[taskStatus="completed"] {
         background: #dcfce7;
         color: #166534;

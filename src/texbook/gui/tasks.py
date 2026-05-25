@@ -19,6 +19,8 @@ class GuiTaskStatus(str, Enum):
 
     pending = "pending"
     running = "running"
+    canceling = "canceling"
+    canceled = "canceled"
     completed = "completed"
     failed = "failed"
 
@@ -33,6 +35,7 @@ class GuiTaskStage(str, Enum):
     chunk = "chunk"
     title = "title"
     finalizing = "finalizing"
+    canceled = "canceled"
     completed = "completed"
     failed = "failed"
 
@@ -45,6 +48,7 @@ TASK_STAGE_LABELS = {
     GuiTaskStage.chunk: "转换正文",
     GuiTaskStage.title: "生成标题",
     GuiTaskStage.finalizing: "收尾",
+    GuiTaskStage.canceled: "已取消",
     GuiTaskStage.completed: "已完成",
     GuiTaskStage.failed: "失败",
 }
@@ -52,8 +56,16 @@ TASK_STAGE_LABELS = {
 TASK_STATUS_LABELS = {
     GuiTaskStatus.pending: "待处理",
     GuiTaskStatus.running: "运行中",
+    GuiTaskStatus.canceling: "取消中",
+    GuiTaskStatus.canceled: "已取消",
     GuiTaskStatus.completed: "完成",
     GuiTaskStatus.failed: "失败",
+}
+
+TERMINAL_TASK_STATUSES = {
+    GuiTaskStatus.canceled,
+    GuiTaskStatus.completed,
+    GuiTaskStatus.failed,
 }
 
 
@@ -163,9 +175,30 @@ def apply_task_update(
 
 def mark_task_running(state: GuiTaskViewState) -> GuiTaskViewState:
     """Mark a task as running without starting conversion in this layer."""
+    if state.status in TERMINAL_TASK_STATUSES:
+        return state
     state.status = GuiTaskStatus.running
     state.progress = max(state.progress, 5)
     state.recent_event = "任务开始"
+    return state
+
+
+def mark_task_canceling(state: GuiTaskViewState) -> GuiTaskViewState:
+    """Mark a task as canceling while a worker is winding down."""
+    if state.status in TERMINAL_TASK_STATUSES:
+        return state
+    state.status = GuiTaskStatus.canceling
+    state.recent_event = "正在取消"
+    return state
+
+
+def mark_task_canceled(state: GuiTaskViewState) -> GuiTaskViewState:
+    """Mark a task as canceled for visual display."""
+    state.status = GuiTaskStatus.canceled
+    state.stage = GuiTaskStage.canceled
+    state.error = ""
+    state.result = ""
+    state.recent_event = "任务已取消"
     return state
 
 
@@ -176,6 +209,8 @@ def mark_task_completed(
     notes: Iterable[str] = (),
 ) -> GuiTaskViewState:
     """Mark a task as completed for visual display."""
+    if state.status == GuiTaskStatus.canceled:
+        return state
     state.status = GuiTaskStatus.completed
     state.stage = GuiTaskStage.completed
     state.progress = 100
@@ -191,6 +226,8 @@ def mark_task_failed(
     error: str,
 ) -> GuiTaskViewState:
     """Mark a task as failed for visual display."""
+    if state.status == GuiTaskStatus.canceled:
+        return state
     state.status = GuiTaskStatus.failed
     state.stage = GuiTaskStage.failed
     state.error = error
@@ -204,34 +241,36 @@ def apply_progress_event(
     event: ProgressEvent,
 ) -> GuiTaskViewState:
     """Merge one core progress event into a GUI task display state."""
+    if state.status in TERMINAL_TASK_STATUSES:
+        return state
     state.recent_event = _event_summary(event)
     if event.kind == "stage_started":
-        state.status = GuiTaskStatus.running
+        _mark_task_active(state)
         state.stage = _stage_for_operation(event.operation)
         state.progress = max(state.progress, _stage_start_progress(event.operation))
         return state
     if event.kind == "stage_completed":
-        state.status = GuiTaskStatus.running
+        _mark_task_active(state)
         state.stage = _stage_for_operation(event.operation)
         state.progress = max(state.progress, _stage_completed_progress(event.operation, event))
         return state
     if event.kind == "cache_hit":
-        state.status = GuiTaskStatus.running
+        _mark_task_active(state)
         state.cache_hits += 1
         state.progress = max(state.progress, _stage_start_progress(event.operation))
         return state
     if event.kind == "retry_scheduled":
-        state.status = GuiTaskStatus.running
+        _mark_task_active(state)
         state.retries += 1
         return state
     if event.kind == "request_started":
-        state.status = GuiTaskStatus.running
+        _mark_task_active(state)
         state.progress = max(state.progress, _stage_start_progress(event.operation))
         return state
     if event.kind == "request_failed":
         return mark_task_failed(state, event.error or "请求失败")
     if event.kind == "request_completed":
-        state.status = GuiTaskStatus.running
+        _mark_task_active(state)
         state.progress = max(state.progress, _stage_completed_progress(event.operation, event))
         return state
     return state
@@ -398,6 +437,11 @@ def _format_output_target(target: GuiOutputTarget) -> str:
 
 def _clamp_progress(value: int) -> int:
     return max(0, min(100, int(value)))
+
+
+def _mark_task_active(state: GuiTaskViewState) -> None:
+    if state.status != GuiTaskStatus.canceling:
+        state.status = GuiTaskStatus.running
 
 
 def _stage_for_operation(operation: str) -> GuiTaskStage:

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from texbook.gui.executor import GuiTaskExecutor
 from texbook.gui.resources import APP_DISPLAY_NAME
 from texbook.gui.selection import (
     GuiInputKind,
@@ -44,10 +45,16 @@ from texbook.gui.tasks import (
     GuiTaskRuntimeUpdate,
     GuiTaskStatus,
     GuiTaskViewState,
+    TERMINAL_TASK_STATUSES,
     apply_progress_event,
     apply_task_update,
     create_conversion_tasks,
     create_task_view_state,
+    mark_task_canceling,
+    mark_task_canceled,
+    mark_task_completed,
+    mark_task_failed,
+    mark_task_running,
 )
 from texbook.gui.widgets import InlineField, MetricPill, OptionGrid, SectionPanel
 from texbook.llm.scheduler import ProgressEvent
@@ -63,6 +70,8 @@ class ConversionMainPanel(QWidget):
         self.tasks = []
         self._task_states: dict[str, GuiTaskViewState] = {}
         self._task_rows: dict[str, QFrame] = {}
+        self._executor: GuiTaskExecutor | None = None
+        self._executor_factory = GuiTaskExecutor
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 18)
@@ -118,7 +127,7 @@ class ConversionMainPanel(QWidget):
         start = QPushButton("开始转换", command_bar)
         start.setObjectName("startButton")
         start.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-        start.setToolTip("任务执行流程将在后续阶段接入。")
+        start.setToolTip("开始执行队列中的待处理任务。")
         start.setEnabled(False)
         self.start_button = start
         layout.addWidget(start)
@@ -489,6 +498,8 @@ class ConversionMainPanel(QWidget):
             [
                 ("待处理", "0", GuiTaskStatus.pending),
                 ("运行中", "0", GuiTaskStatus.running),
+                ("取消中", "0", GuiTaskStatus.canceling),
+                ("已取消", "0", GuiTaskStatus.canceled),
                 ("完成", "0", GuiTaskStatus.completed),
                 ("失败", "0", GuiTaskStatus.failed),
             ]
@@ -604,7 +615,7 @@ class ConversionMainPanel(QWidget):
         self.output_kind_combo.currentTextChanged.connect(self._sync_gui_state)
         self.batch_pattern_field.textChanged.connect(self._sync_gui_state)
         self.add_task_button.clicked.connect(self.add_current_tasks)
-        self.start_button.clicked.connect(self._notify_execution_pending)
+        self.start_button.clicked.connect(self.start_pending_tasks)
         self.title_source_combo.currentTextChanged.connect(self._sync_gui_state)
         self.structure_mode_combo.currentTextChanged.connect(self._sync_gui_state)
         self.document_class_combo.currentTextChanged.connect(self._sync_gui_state)
@@ -786,8 +797,14 @@ class ConversionMainPanel(QWidget):
 
     def _refresh_action_state(self) -> None:
         settings = self.current_settings()
-        self.add_task_button.setEnabled(self.selection_state.can_add_task and not validate_gui_settings(settings))
-        self.start_button.setEnabled(any(state.status == GuiTaskStatus.pending for state in self._task_states.values()))
+        is_running = self._executor is not None
+        self.add_task_button.setEnabled(
+            not is_running and self.selection_state.can_add_task and not validate_gui_settings(settings)
+        )
+        self.start_button.setEnabled(
+            not is_running
+            and any(state.status == GuiTaskStatus.pending for state in self._task_states.values())
+        )
         single_input = self._current_input_kind() == GuiInputKind.single_file
         self.manual_title_field.setEnabled(single_input and self.title_source_combo.currentText() != "llm")
         self.show_date_checkbox.setEnabled(True)
@@ -895,6 +912,9 @@ class ConversionMainPanel(QWidget):
 
     def add_current_tasks(self) -> None:
         """Create pending in-memory tasks from current settings."""
+        if self._executor is not None:
+            self._publish_status_message("转换运行中，暂不能添加新任务。")
+            return
         try:
             new_tasks = create_conversion_tasks(self.current_settings())
         except GuiTaskCreationError as exc:
@@ -905,6 +925,56 @@ class ConversionMainPanel(QWidget):
             self._task_states[task.task_id] = create_task_view_state(task)
         self._refresh_task_summary()
         self._publish_status_message(f"已添加 {len(new_tasks)} 个待处理任务")
+
+    def start_pending_tasks(self) -> None:
+        """Start background execution for all pending tasks."""
+        if self._executor is not None:
+            self._publish_status_message("转换正在运行。")
+            return
+        pending_tasks = [
+            task
+            for task in self.tasks
+            if task.task_id in self._task_states
+            and self._task_states[task.task_id].status == GuiTaskStatus.pending
+        ]
+        if not pending_tasks:
+            self._publish_status_message("没有待处理任务。")
+            self._refresh_action_state()
+            return
+
+        max_workers = self.current_settings().batch_workers
+        executor = self._executor_factory(pending_tasks, max_workers=max_workers, parent=self)
+        self._executor = executor
+        executor.task_started.connect(self._handle_executor_task_started)
+        executor.task_progress.connect(self._handle_executor_task_progress)
+        executor.task_completed.connect(self._handle_executor_task_completed)
+        executor.task_failed.connect(self._handle_executor_task_failed)
+        executor.task_canceling.connect(self._handle_executor_task_canceling)
+        executor.task_canceled.connect(self._handle_executor_task_canceled)
+        executor.all_finished.connect(self._handle_executor_finished)
+        self._publish_status_message(f"开始执行 {len(pending_tasks)} 个任务")
+        self._refresh_action_state()
+        executor.start()
+
+    def cancel_task(self, task_id: str) -> None:
+        """Cancel one pending or running task."""
+        state = self._task_states.get(task_id)
+        if state is None:
+            raise ValueError(f"未知任务：{task_id}")
+        if state.status in TERMINAL_TASK_STATUSES:
+            return
+        if state.status == GuiTaskStatus.pending:
+            if self._executor is not None:
+                self._executor.cancel_task(task_id)
+            mark_task_canceled(state)
+            self._refresh_task_summary()
+            self._publish_status_message("已取消待处理任务")
+            return
+        mark_task_canceling(state)
+        if self._executor is not None:
+            self._executor.cancel_task(task_id)
+        self._refresh_task_summary()
+        self._publish_status_message("正在取消任务")
 
     def task_view_states(self) -> tuple[GuiTaskViewState, ...]:
         """Return current task display states in queue order."""
@@ -929,6 +999,57 @@ class ConversionMainPanel(QWidget):
             raise ValueError(f"未知任务：{task_id}")
         apply_progress_event(state, event)
         self._refresh_task_summary()
+
+    def _handle_executor_task_started(self, task_id: str) -> None:
+        state = self._task_states.get(task_id)
+        if state is None or state.status == GuiTaskStatus.canceled:
+            return
+        mark_task_running(state)
+        self._refresh_task_summary()
+        self._publish_status_message(f"正在转换：{state.label}")
+
+    def _handle_executor_task_progress(self, task_id: str, event: object) -> None:
+        if isinstance(event, ProgressEvent):
+            self.handle_task_progress(task_id, event)
+
+    def _handle_executor_task_completed(self, task_id: str, result: str, notes: object) -> None:
+        state = self._task_states.get(task_id)
+        if state is None:
+            return
+        resolved_notes = tuple(notes) if isinstance(notes, tuple) else ()
+        mark_task_completed(state, result=result, notes=resolved_notes)
+        self._refresh_task_summary()
+        self._publish_status_message(f"转换完成：{state.label}")
+
+    def _handle_executor_task_failed(self, task_id: str, error: str) -> None:
+        state = self._task_states.get(task_id)
+        if state is None:
+            return
+        mark_task_failed(state, error)
+        self._refresh_task_summary()
+        self._publish_status_message(f"转换失败：{state.label}")
+
+    def _handle_executor_task_canceling(self, task_id: str) -> None:
+        state = self._task_states.get(task_id)
+        if state is None:
+            return
+        mark_task_canceling(state)
+        self._refresh_task_summary()
+
+    def _handle_executor_task_canceled(self, task_id: str) -> None:
+        state = self._task_states.get(task_id)
+        if state is None:
+            return
+        mark_task_canceled(state)
+        self._refresh_task_summary()
+        self._publish_status_message(f"已取消：{state.label}")
+
+    def _handle_executor_finished(self) -> None:
+        if self._executor is not None:
+            self._executor.deleteLater()
+            self._executor = None
+        self._refresh_task_summary()
+        self._publish_status_message("后台转换已结束")
 
     def _refresh_task_summary(self) -> None:
         counts = {status: 0 for status in GuiTaskStatus}
@@ -988,6 +1109,14 @@ class ConversionMainPanel(QWidget):
         status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status.setProperty("taskStatus", state.status.value)
         header.addWidget(status)
+
+        cancel = self._make_icon_button(
+            f"taskCancelButton_{state.task_id}",
+            QStyle.StandardPixmap.SP_DialogCancelButton,
+            "取消任务",
+        )
+        cancel.clicked.connect(lambda _checked=False, task_id=state.task_id: self.cancel_task(task_id))
+        header.addWidget(cancel)
         layout.addLayout(header)
 
         target = QLabel(row)
@@ -1038,6 +1167,12 @@ class ConversionMainPanel(QWidget):
             status.style().unpolish(status)
             status.style().polish(status)
 
+        cancel = row.findChild(QToolButton, f"taskCancelButton_{state.task_id}")
+        if cancel is not None:
+            active = state.status not in TERMINAL_TASK_STATUSES
+            cancel.setEnabled(active)
+            cancel.setVisible(active)
+
         target = row.findChild(QLabel, f"taskTargetLabel_{state.task_id}")
         if target is not None:
             target.setText(self._task_target_text(state))
@@ -1080,11 +1215,17 @@ class ConversionMainPanel(QWidget):
     def _task_result_text(self, state: GuiTaskViewState) -> str:
         if state.status == GuiTaskStatus.failed:
             return f"失败原因：{state.error or '未知错误'}"
+        if state.status == GuiTaskStatus.canceled:
+            return "任务已取消"
         if state.status == GuiTaskStatus.completed:
             return f"完成结果：{state.result or state.task.output_target.path}"
         if state.notes:
             return "；".join(state.notes)
         return "等待后台执行"
 
-    def _notify_execution_pending(self) -> None:
-        self._publish_status_message("后台执行将在后续阶段接入。")
+    def close_executor(self) -> None:
+        """Request executor shutdown when the owning window is closing."""
+        if self._executor is not None:
+            self._executor.shutdown()
+            self._executor.deleteLater()
+            self._executor = None

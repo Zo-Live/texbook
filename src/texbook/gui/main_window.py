@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QAction, QCloseEvent, QIcon
 from PySide6.QtWidgets import QMainWindow
 
 from texbook.gui.main_panel import ConversionMainPanel
@@ -42,3 +42,10 @@ class MainWindow(QMainWindow):
 
     def _setup_status_bar(self) -> None:
         self.statusBar().showMessage("就绪")
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        panel = self.centralWidget()
+        close_executor = getattr(panel, "close_executor", None)
+        if callable(close_executor):
+            close_executor()
+        super().closeEvent(event)

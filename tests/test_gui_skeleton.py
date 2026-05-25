@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import runpy
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -22,9 +23,18 @@ from PySide6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
+from texbook.convert import LatexProjectResult  # noqa: E402
 from texbook.document_class import DocumentClassMode  # noqa: E402
 from texbook.gui.app import create_application  # noqa: E402
 from texbook.gui.core_adapter import build_core_conversion_bundle  # noqa: E402
+from texbook.gui.executor import (  # noqa: E402
+    GuiCancellationToken,
+    GuiTaskCanceled,
+    GuiTaskExecutionError,
+    run_gui_conversion_task,
+    write_project_result_conservatively,
+    write_tex_result_conservatively,
+)
 from texbook.gui.main_panel import ConversionMainPanel  # noqa: E402
 from texbook.gui.main_window import MainWindow  # noqa: E402
 from texbook.gui.resources import (  # noqa: E402
@@ -47,11 +57,87 @@ from texbook.gui.tasks import (  # noqa: E402
     mark_task_running,
 )
 from texbook.llm.scheduler import ProgressEvent  # noqa: E402
+from texbook.llm.pipeline import LLMConversionResult  # noqa: E402
 from texbook.output_options import BeamerBoxStyle, CtexFontProfile  # noqa: E402
 from texbook.structure import StructureMode  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _FakeConverter:
+    def __init__(self, progress_reporter=None, *, cancel_during_convert: GuiCancellationToken | None = None):
+        self.progress_reporter = progress_reporter
+        self.cancel_during_convert = cancel_during_convert
+
+    def convert(self, pdf_path: Path, *, pages: list[int] | None = None):
+        if self.progress_reporter is not None:
+            self.progress_reporter(
+                ProgressEvent(
+                    kind="stage_completed",
+                    operation="chunk",
+                    label=pdf_path.name,
+                    metadata={"chunk_index": 1, "total_chunks": 1, "pages": pages or []},
+                )
+            )
+        if self.cancel_during_convert is not None:
+            self.cancel_during_convert.cancel()
+        return LLMConversionResult(latex=f"% {pdf_path.name}\n", notes=["note"])
+
+    def convert_project(self, pdf_path: Path, *, pages: list[int] | None = None):
+        if self.progress_reporter is not None:
+            self.progress_reporter(
+                ProgressEvent(kind="stage_completed", operation="conversion", label=pdf_path.name)
+            )
+        return LatexProjectResult(
+            files={
+                PurePosixPath("main.tex"): "% main\n",
+                PurePosixPath("chapters/chapter01.tex"): "% body\n",
+            },
+            entrypoint=PurePosixPath("main.tex"),
+            notes=["project note"],
+        )
+
+
+class _FakeExecutor:
+    def __init__(self, tasks, *, max_workers=1, parent=None):
+        self.tasks = list(tasks)
+        self.max_workers = max_workers
+        self.parent = parent
+        self.started = False
+        self.canceled_task_ids = []
+        self.task_started = _FakeSignal()
+        self.task_progress = _FakeSignal()
+        self.task_completed = _FakeSignal()
+        self.task_failed = _FakeSignal()
+        self.task_canceling = _FakeSignal()
+        self.task_canceled = _FakeSignal()
+        self.all_finished = _FakeSignal()
+
+    def start(self):
+        self.started = True
+
+    def cancel_task(self, task_id: str):
+        self.canceled_task_ids.append(task_id)
+        self.task_canceling.emit(task_id)
+
+    def shutdown(self):
+        pass
+
+    def deleteLater(self):
+        pass
+
+
+class _FakeSignal:
+    def __init__(self):
+        self._slots = []
+
+    def connect(self, slot):
+        self._slots.append(slot)
+
+    def emit(self, *args):
+        for slot in list(self._slots):
+            slot(*args)
 
 
 def test_icon_resource_resolves_to_docs_icon():
@@ -696,6 +782,131 @@ def test_task_view_state_tracks_runtime_updates_and_progress_events(monkeypatch)
     assert state.error == "LLM failed"
 
 
+def test_gui_conservative_tex_write_refuses_existing_target(tmp_path):
+    target = tmp_path / "out" / "lecture.tex"
+
+    written = write_tex_result_conservatively("% hello\n", target)
+
+    assert written == target
+    assert target.read_text(encoding="utf-8") == "% hello\n"
+
+    try:
+        write_tex_result_conservatively("% overwrite\n", target)
+    except GuiTaskExecutionError as exc:
+        assert "输出文件已存在" in str(exc)
+    else:
+        raise AssertionError("expected existing .tex output to fail")
+
+    assert target.read_text(encoding="utf-8") == "% hello\n"
+
+
+def test_gui_conservative_project_write_refuses_nonempty_directory(tmp_path):
+    project = LatexProjectResult(
+        files={
+            PurePosixPath("main.tex"): "% main\n",
+            PurePosixPath("chapters/chapter01.tex"): "% body\n",
+        },
+        entrypoint=PurePosixPath("main.tex"),
+        notes=["done"],
+    )
+    target = tmp_path / "project"
+
+    entrypoint = write_project_result_conservatively(project, target)
+
+    assert entrypoint == target / "main.tex"
+    assert (target / "main.tex").read_text(encoding="utf-8") == "% main\n"
+    assert (target / "chapters" / "chapter01.tex").exists()
+
+    try:
+        write_project_result_conservatively(project, target)
+    except GuiTaskExecutionError as exc:
+        assert "项目输出目录非空" in str(exc)
+    else:
+        raise AssertionError("expected nonempty project output to fail")
+
+
+def test_run_gui_conversion_task_writes_tex_and_forwards_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    task = create_conversion_tasks(
+        GuiConversionSettings(
+            path_state=GuiPathSelectionState(
+                input_selection=GuiInputSelection.from_single_file("lecture.pdf"),
+                output_directory=str(tmp_path / "lecture"),
+            ),
+            pages="1",
+        ),
+        repo_root=ROOT,
+    )[0]
+    events = []
+
+    result = run_gui_conversion_task(
+        task,
+        progress_reporter=events.append,
+        converter_factory=lambda _task, reporter: _FakeConverter(reporter),
+    )
+
+    assert result.result == str(tmp_path / "lecture.tex")
+    assert result.notes == ("note",)
+    assert (tmp_path / "lecture.tex").read_text(encoding="utf-8") == "% lecture.pdf\n"
+    assert [event.kind for event in events] == ["stage_completed"]
+
+
+def test_run_gui_conversion_task_writes_project_output(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    task = create_conversion_tasks(
+        GuiConversionSettings(
+            path_state=GuiPathSelectionState(
+                input_selection=GuiInputSelection.from_single_file("lecture.pdf"),
+                output_directory=str(tmp_path / "project"),
+            ),
+            output_kind=GuiOutputKind.project,
+        ),
+        repo_root=ROOT,
+    )[0]
+
+    result = run_gui_conversion_task(
+        task,
+        converter_factory=lambda _task, reporter: _FakeConverter(reporter),
+    )
+
+    assert result.result == str(tmp_path / "project" / "main.tex")
+    assert result.notes == ("project note",)
+    assert (tmp_path / "project" / "main.tex").exists()
+
+
+def test_run_gui_conversion_task_can_cancel_before_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    token = GuiCancellationToken()
+    task = create_conversion_tasks(
+        GuiConversionSettings(
+            path_state=GuiPathSelectionState(
+                input_selection=GuiInputSelection.from_single_file("lecture.pdf"),
+                output_directory=str(tmp_path / "lecture"),
+            )
+        ),
+        repo_root=ROOT,
+    )[0]
+
+    try:
+        run_gui_conversion_task(
+            task,
+            cancellation_token=token,
+            converter_factory=lambda _task, reporter: _FakeConverter(
+                reporter,
+                cancel_during_convert=token,
+            ),
+        )
+    except GuiTaskCanceled:
+        pass
+    else:
+        raise AssertionError("expected cancellation before write")
+
+    assert not (tmp_path / "lecture.tex").exists()
+
+
 def test_conversion_panel_adds_visual_task_rows_and_updates_progress(monkeypatch):
     monkeypatch.setenv("TEXBOOK_MODEL", "model")
     monkeypatch.setenv("TEXBOOK_API_KEY", "key")
@@ -754,20 +965,82 @@ def test_conversion_panel_adds_visual_task_rows_and_updates_progress(monkeypatch
     app.quit()
 
 
-def test_conversion_panel_start_button_only_reports_future_execution(monkeypatch):
+def test_conversion_panel_start_button_runs_fake_executor(monkeypatch):
     monkeypatch.setenv("TEXBOOK_MODEL", "model")
     monkeypatch.setenv("TEXBOOK_API_KEY", "key")
     app = create_application(["texbook-gui-test"])
     window = MainWindow()
     panel = window.centralWidget()
     assert isinstance(panel, ConversionMainPanel)
+    panel._executor_factory = _FakeExecutor
 
-    panel.set_input_selection(GuiInputSelection.from_single_file("lecture.pdf"))
-    panel.set_output_directory("out/lecture")
+    panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
+    panel.set_output_directory("out")
+    panel.findChild(QSpinBox, "batchWorkersSpinBox").setValue(2)
     panel.findChild(QPushButton, "addTaskButton").click()
     panel.findChild(QPushButton, "startButton").click()
+    executor = panel._executor
 
-    assert window.statusBar().currentMessage() == "后台执行将在后续阶段接入。"
+    assert isinstance(executor, _FakeExecutor)
+    assert executor.started is True
+    assert executor.max_workers == 2
+    assert panel.findChild(QPushButton, "startButton").isEnabled() is False
+
+    first_id = panel.task_view_states()[0].task_id
+    executor.task_started.emit(first_id)
+    executor.task_progress.emit(
+        first_id,
+        ProgressEvent(
+            kind="stage_completed",
+            operation="chunk",
+            label="chunk 1/1",
+            metadata={"chunk_index": 1, "total_chunks": 1},
+        ),
+    )
+    executor.task_completed.emit(first_id, "out/a.tex", ("done",))
+
+    assert panel.findChild(QLabel, f"taskStatusBadge_{first_id}").text() == "完成"
+    assert panel.findChild(QLabel, f"taskResultLabel_{first_id}").text() == "完成结果：out/a.tex"
+
+    executor.all_finished.emit()
+    assert panel._executor is None
+    assert window.statusBar().currentMessage() == "后台转换已结束"
+
+    window.close()
+    app.quit()
+
+
+def test_conversion_panel_cancels_pending_and_running_tasks(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+    panel._executor_factory = _FakeExecutor
+
+    panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
+    panel.set_output_directory("out")
+    panel.findChild(QPushButton, "addTaskButton").click()
+
+    first_id, second_id = [state.task_id for state in panel.task_view_states()]
+    panel.cancel_task(first_id)
+
+    assert panel.findChild(QLabel, f"taskStatusBadge_{first_id}").text() == "已取消"
+    assert panel.findChild(QLabel, f"taskResultLabel_{first_id}").text() == "任务已取消"
+
+    panel.findChild(QPushButton, "startButton").click()
+    executor = panel._executor
+    assert isinstance(executor, _FakeExecutor)
+    executor.task_started.emit(second_id)
+    panel.cancel_task(second_id)
+
+    assert executor.canceled_task_ids == [second_id]
+    assert panel.findChild(QLabel, f"taskStatusBadge_{second_id}").text() == "取消中"
+
+    executor.task_canceled.emit(second_id)
+    assert panel.findChild(QLabel, f"taskStatusBadge_{second_id}").text() == "已取消"
+    assert panel.findChild(QPushButton, "startButton").isEnabled() is False
 
     window.close()
     app.quit()
