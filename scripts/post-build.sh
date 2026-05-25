@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Move local LaTeX build outputs for the current latexmk job into mirror dirs.
+# Move local LaTeX outputs for the current latexmk job into flat out and per-target build dirs.
 
 set -euo pipefail
 

@@ -149,7 +149,7 @@ latexmk "lecture 1.tex"
 latexmk lecture-project/main.tex
 ```
 
-本地 `.latexmkrc` 使用 `xelatex`，把 PDF 输出到 `out/`，把辅助产物输出或归位到 `build/`。`out/` 和 `build/` 会按入口文件相对 `src/` 的父目录镜像，例如 `src/test.tex` 生成 `out/test.pdf` 与 `build/test.*`，`src/lecture-project/main.tex` 生成 `out/lecture-project/main.pdf` 与 `build/lecture-project/main.*`。这些目录默认不进入 Git。
+本地 `.latexmkrc` 使用 `xelatex`，把最终 PDF 输出到 `out/` 根部，把辅助产物输出或归位到 `build/<产物名>/`。普通单文件入口使用文件 stem 作为产物名，例如 `src/test.tex` 生成 `out/test.pdf` 与 `build/test/`；目录化项目入口 `src/lecture-project/main.tex` 使用直接父目录名作为产物名，生成 `out/lecture-project.pdf` 与 `build/lecture-project/`。这些目录默认不进入 Git。
 
 ## 标题、日期和 Prompt 预设
 
@@ -235,8 +235,8 @@ uv run texbook presets add --name chinese-math-lite --from-preset chinese-math -
 
 - `input/`、`docs/`：可放置待转换 PDF，默认不进入 Git。
 - `output/`、`src/*.tex`：可放置生成的 `.tex`，默认不进入 Git。
-- `build/`：默认缓存目录，默认不进入 Git。
-- `out/`：可作为本地编译输出目录，默认不进入 Git。
+- `build/`：默认缓存目录和本地编译辅助产物目录，默认不进入 Git。
+- `out/`：本地编译最终 PDF 输出目录，默认不进入 Git。
 
 ## 开发
 

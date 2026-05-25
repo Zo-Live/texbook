@@ -1,5 +1,5 @@
 use Cwd qw(abs_path getcwd);
-use File::Basename qw(dirname);
+use File::Basename qw(basename dirname);
 use File::Spec;
 
 my $cwd = abs_path(getcwd());
@@ -37,7 +37,7 @@ sub _texbook_shell_quote {
     return "'$value'";
 }
 
-sub _texbook_mirror_parent {
+sub _texbook_product_name {
     my ($tex_arg) = @_;
     return '' if $tex_arg eq '';
 
@@ -45,29 +45,33 @@ sub _texbook_mirror_parent {
         ? $tex_arg
         : File::Spec->rel2abs($tex_arg, $cwd);
     my $tex_dir = dirname($path);
-    return '' if ! -d $tex_dir;
-
+    my $tex_name = basename($path);
+    $tex_name =~ s/\.tex$//i;
     my $abs_dir = abs_path($tex_dir);
-    return '' if ! defined $abs_dir;
-    my $relative = File::Spec->abs2rel($abs_dir, $src_root);
-    return '' if $relative eq '.';
-    return '' if $relative =~ /^\.\.(?:\/|$)/;
-    return $relative;
+    return $tex_name if ! defined $abs_dir;
+
+    my $relative_dir = File::Spec->abs2rel($abs_dir, $src_root);
+    if ($tex_name eq 'main' && $relative_dir ne '.' && $relative_dir !~ /^\.\.(?:\/|$)/) {
+        return basename($abs_dir);
+    }
+    return $tex_name;
 }
 
 my $texbook_tex_arg = _texbook_first_tex_arg();
-my $texbook_mirror_parent = _texbook_mirror_parent($texbook_tex_arg);
+my $texbook_product_name = _texbook_product_name($texbook_tex_arg);
 
 $pdf_mode = 5;
 $do_cd = 1;
 $emulate_aux = 1;
 
-$out_dir = $texbook_mirror_parent eq ''
-    ? "$repo_root/out"
-    : "$repo_root/out/$texbook_mirror_parent";
-$aux_dir = $texbook_mirror_parent eq ''
+if ($texbook_product_name ne '') {
+    $jobname = $texbook_product_name;
+}
+
+$out_dir = "$repo_root/out";
+$aux_dir = $texbook_product_name eq ''
     ? "$repo_root/build"
-    : "$repo_root/build/$texbook_mirror_parent";
+    : "$repo_root/build/$texbook_product_name";
 
 $xelatex = 'xelatex -synctex=1 -interaction=nonstopmode -file-line-error %O %S';
 
