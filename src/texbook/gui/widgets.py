@@ -2,27 +2,21 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPalette, QWheelEvent
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
-    QApplication,
-    QComboBox,
+    QButtonGroup,
+    QCheckBox,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QListView,
     QSizePolicy,
     QSpinBox,
-    QStyle,
-    QStyleOptionViewItem,
-    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
-
-from texbook.gui.theme import ComboPopupStyle
 
 
 class SectionPanel(QFrame):
@@ -138,155 +132,82 @@ class MetricPill(QFrame):
         self.label_widget.setText(label)
 
 
-def close_combo_popup(combo_box: QComboBox) -> None:
-    """Hide a combo box popup if it is currently visible."""
-    view = combo_box.view()
-    if view is None or not view.isVisible():
-        return
-    combo_box.hidePopup()
+class ChoiceGrid(QWidget):
+    """Exclusive check-box option group with at most three options per row."""
 
-
-def _application_combo_boxes() -> list[QComboBox]:
-    app = QApplication.instance()
-    if app is None:
-        return []
-    combo_boxes: list[QComboBox] = []
-    seen: set[int] = set()
-    for widget in app.topLevelWidgets():
-        for combo_box in widget.findChildren(QComboBox):
-            combo_id = id(combo_box)
-            if combo_id in seen:
-                continue
-            seen.add(combo_id)
-            combo_boxes.append(combo_box)
-    return combo_boxes
-
-
-def close_combo_popups(root: QWidget | None = None, *, exclude: QComboBox | None = None) -> None:
-    """Close visible combo-box popups without directly closing Qt popup windows."""
-    combo_boxes: list[QComboBox] = (
-        root.findChildren(QComboBox) if root is not None else _application_combo_boxes()
-    )
-
-    for combo_box in combo_boxes:
-        if combo_box is exclude:
-            continue
-        close_combo_popup(combo_box)
-
-
-class ComboPopupItemDelegate(QStyledItemDelegate):
-    """Paint combo popup items with explicit theme colors."""
+    value_changed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._popup_style: ComboPopupStyle | None = None
+        self.setProperty("choiceGroup", True)
+        self._value_by_button: dict[QCheckBox, str] = {}
+        self._button_by_value: dict[str, QCheckBox] = {}
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._group.buttonToggled.connect(self._handle_button_toggled)
+        self._layout = QGridLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setHorizontalSpacing(12)
+        self._layout.setVerticalSpacing(8)
 
-    def set_popup_style(self, style: ComboPopupStyle) -> None:
-        """Update colors used when painting popup list items."""
-        self._popup_style = style
+    def set_items(
+        self,
+        items: tuple[tuple[str, str], ...],
+        *,
+        current_value: str | None = None,
+    ) -> None:
+        """Replace option labels while preserving the selected stable value."""
+        selected = current_value if current_value is not None else self.value()
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                self._group.removeButton(widget)
+                widget.deleteLater()
+        self._value_by_button.clear()
+        self._button_by_value.clear()
 
-    def paint(self, painter, option, index) -> None:  # type: ignore[override]
-        if self._popup_style is None:
-            super().paint(painter, option, index)
+        for index, (value, label) in enumerate(items):
+            option = QCheckBox(label, self)
+            option.setProperty("choiceOption", True)
+            option.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            self._group.addButton(option)
+            self._value_by_button[option] = value
+            self._button_by_value[value] = option
+            self._layout.addWidget(option, index // 3, index % 3)
+
+        self.set_value(selected if selected in self._button_by_value else "")
+
+    def value(self) -> str:
+        """Return the stable value for the checked option."""
+        checked = self._group.checkedButton()
+        if not isinstance(checked, QCheckBox):
+            return ""
+        return self._value_by_button.get(checked, "")
+
+    def set_value(self, value: str, *, emit: bool = True) -> None:
+        """Select an option by stable value."""
+        button = self._button_by_value.get(value)
+        if button is None:
+            button = next(iter(self._button_by_value.values()), None)
+        if button is None:
             return
+        old_value = self.value()
+        previous = self._group.blockSignals(True)
+        button.setChecked(True)
+        self._group.blockSignals(previous)
+        new_value = self.value()
+        if emit and new_value != old_value:
+            self.value_changed.emit(new_value)
 
-        item_option = QStyleOptionViewItem(option)
-        self.initStyleOption(item_option, index)
+    def option_buttons(self) -> list[QCheckBox]:
+        """Return option widgets in visual order."""
+        return list(self._button_by_value.values())
 
-        selected = bool(item_option.state & QStyle.StateFlag.State_Selected)
-        hovered = bool(item_option.state & QStyle.StateFlag.State_MouseOver)
-        enabled = bool(item_option.state & QStyle.StateFlag.State_Enabled)
-
-        background = self._popup_style.background
-        foreground = self._popup_style.text
-        if selected:
-            background = self._popup_style.selected_background
-            foreground = self._popup_style.selected_text
-        elif hovered:
-            background = self._popup_style.hover_background
-            foreground = self._popup_style.hover_text
-        if not enabled:
-            foreground = self._popup_style.disabled_text
-
-        painter.save()
-        painter.fillRect(item_option.rect, background)
-        painter.setPen(foreground)
-        painter.setFont(item_option.font)
-        text_rect = item_option.rect.adjusted(10, 0, -10, 0)
-        text = item_option.fontMetrics.elidedText(
-            item_option.text,
-            Qt.TextElideMode.ElideRight,
-            max(0, text_rect.width()),
-        )
-        painter.drawText(
-            text_rect,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            text,
-        )
-        painter.restore()
-
-    def sizeHint(self, option, index):  # type: ignore[override]
-        size = super().sizeHint(option, index)
-        size.setHeight(max(size.height(), option.fontMetrics.height() + 12))
-        return size
-
-
-class FocusWheelComboBox(QComboBox):
-    """Combo box that never changes value from mouse wheel scrolling."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._popup_style: ComboPopupStyle | None = None
-        self._popup_delegate = ComboPopupItemDelegate(self)
-        self._popup_view = QListView(self)
-        self._popup_view.setObjectName("comboPopupView")
-        self._popup_view.setItemDelegate(self._popup_delegate)
-        self._popup_view.setUniformItemSizes(False)
-        self.setView(self._popup_view)
-
-    def set_popup_style(self, style: ComboPopupStyle) -> None:
-        """Store and apply the direct popup style used by detached Qt popup windows."""
-        self._popup_style = style
-        self._popup_delegate.set_popup_style(style)
-        self._apply_popup_style()
-
-    def _apply_popup_style(self) -> None:
-        if self._popup_style is None:
+    def _handle_button_toggled(self, button, checked: bool) -> None:
+        if not checked or not isinstance(button, QCheckBox):
             return
-        view = self.view()
-        if view is None:
-            return
-
-        palette = QPalette(self._popup_style.palette)
-        view.setStyleSheet(self._popup_style.view_stylesheet)
-        view.setPalette(palette)
-        view.setItemDelegate(self._popup_delegate)
-        view.setAutoFillBackground(True)
-        view.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-
-        viewport = view.viewport()
-        if viewport is not None:
-            viewport.setPalette(QPalette(self._popup_style.palette))
-            viewport.setAutoFillBackground(True)
-
-        popup_window = view.window()
-        if popup_window is not None and popup_window is not self.window():
-            popup_window.setStyleSheet(self._popup_style.window_stylesheet)
-            popup_window.setPalette(QPalette(self._popup_style.palette))
-            popup_window.setAutoFillBackground(True)
-            popup_window.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-
-    def showPopup(self) -> None:
-        close_combo_popups(self.window(), exclude=self)
-        self._apply_popup_style()
-        super().showPopup()
-        self._apply_popup_style()
-
-    def hidePopup(self) -> None:
-        super().hidePopup()
-
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        event.ignore()
+        self.value_changed.emit(self._value_by_button.get(button, ""))
 
 
 class FocusWheelSpinBox(QSpinBox):

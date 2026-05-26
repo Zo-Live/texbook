@@ -11,12 +11,10 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QRect, QSettings, Qt  # noqa: E402
-from PySide6.QtGui import QImage, QPainter, QPalette  # noqa: E402
+from PySide6.QtCore import QEvent, QSettings, Qt  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QCheckBox,
-    QComboBox,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -24,8 +22,6 @@ from PySide6.QtWidgets import (  # noqa: E402
     QProgressBar,
     QPushButton,
     QSpinBox,
-    QStyle,
-    QStyleOptionViewItem,
     QToolButton,
     QWidget,
 )
@@ -79,11 +75,7 @@ from texbook.gui.tasks import (  # noqa: E402
     mark_task_failed,
     mark_task_running,
 )
-from texbook.gui.widgets import (  # noqa: E402
-    ComboPopupItemDelegate,
-    FocusWheelComboBox,
-    close_combo_popups,
-)
+from texbook.gui.widgets import ChoiceGrid  # noqa: E402
 from texbook.llm.scheduler import ProgressEvent  # noqa: E402
 from texbook.llm.pipeline import LLMConversionResult  # noqa: E402
 from texbook.output_options import BeamerBoxStyle, CtexFontProfile  # noqa: E402
@@ -197,26 +189,6 @@ class _FakeSignal:
             slot(*args)
 
 
-class PopupTrackingComboBox(QComboBox):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.hide_popup_calls = 0
-
-    def hidePopup(self):
-        self.hide_popup_calls += 1
-        super().hidePopup()
-
-
-class TrackingFocusWheelComboBox(FocusWheelComboBox):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.hide_popup_calls = 0
-
-    def hidePopup(self):
-        self.hide_popup_calls += 1
-        super().hidePopup()
-
-
 class _FakeWheelEvent:
     def __init__(self):
         self.ignored = False
@@ -225,54 +197,18 @@ class _FakeWheelEvent:
         self.ignored = True
 
 
-def _assert_combo_popup_style(combo: QComboBox, *, surface: str, text: str) -> None:
-    combo.showPopup()
-    try:
-        view = combo.view()
-        popup_window = view.window()
-        delegate = view.itemDelegate()
-
-        assert surface in view.styleSheet()
-        assert text in view.styleSheet()
-        assert view.palette().color(QPalette.ColorRole.Text).name() == text
-        assert view.viewport().palette().color(QPalette.ColorRole.Base).name() == surface
-        assert isinstance(delegate, ComboPopupItemDelegate)
-        assert delegate._popup_style is not None
-        assert delegate._popup_style.background.name() == surface
-        assert delegate._popup_style.text.name() == text
-        assert delegate._popup_style.selected_text.name() == "#ffffff"
-        if popup_window is not combo.window():
-            assert surface in popup_window.styleSheet()
-            assert popup_window.palette().color(QPalette.ColorRole.Window).name() == surface
-    finally:
-        combo.hidePopup()
+def _choice(panel: QWidget, object_name: str) -> ChoiceGrid:
+    choices = panel.findChild(ChoiceGrid, object_name)
+    assert choices is not None
+    return choices
 
 
-def _assert_combo_delegate_paints_visible_text(combo: QComboBox, *, surface: str) -> None:
-    delegate = combo.view().itemDelegate()
-    assert isinstance(delegate, ComboPopupItemDelegate)
-    index = combo.model().index(0, combo.modelColumn(), combo.rootModelIndex())
-    option = QStyleOptionViewItem()
-    option.rect = QRect(0, 0, 220, 44)
-    option.state = QStyle.StateFlag.State_Enabled
-    option.font = combo.font()
-    option.palette = combo.view().palette()
+def _set_choice(panel: QWidget, object_name: str, value: str) -> None:
+    _choice(panel, object_name).set_value(value)
 
-    image = QImage(option.rect.size(), QImage.Format.Format_ARGB32)
-    image.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(image)
-    try:
-        delegate.paint(painter, option, index)
-    finally:
-        painter.end()
 
-    background = image.pixelColor(0, 0).name()
-    assert background == surface
-    assert any(
-        image.pixelColor(x, y).name() != surface
-        for x in range(image.width())
-        for y in range(image.height())
-    )
+def _choice_value(panel: QWidget, object_name: str) -> str:
+    return _choice(panel, object_name).value()
 
 
 def test_icon_resource_resolves_to_docs_icon():
@@ -308,83 +244,17 @@ def test_gui_stylesheet_uses_application_font_without_small_body_px():
     assert "min-height: 28px" in stylesheet
 
 
-def test_gui_dark_stylesheet_covers_combo_popup_list():
+def test_gui_dark_stylesheet_covers_dialog_and_choice_groups():
     stylesheet = build_fluent_stylesheet(GuiThemeMode.dark)
 
-    assert "QComboBox QAbstractItemView" in stylesheet
+    assert "QComboBox" not in stylesheet
     assert "background: #24272d" in stylesheet
     assert "color: #edf1f7" in stylesheet
-    assert "selection-background-color: #4aa3ff" in stylesheet
-    assert "selection-color: #ffffff" in stylesheet
     assert "QDialog#aboutDialog" in stylesheet
     assert "QDialog#settingsDialog" in stylesheet
     assert "QDialog QLabel" in stylesheet
     assert "QMessageBox QLabel" in stylesheet
-
-
-@pytest.mark.parametrize(
-    ("theme", "surface", "text"),
-    [
-        (GuiThemeMode.light, "#ffffff", "#1f2328"),
-        (GuiThemeMode.dark, "#24272d", "#edf1f7"),
-    ],
-)
-def test_combo_popup_gets_direct_theme_style(theme, surface, text):
-    app = create_application(["texbook-gui-test"])
-    panel = ConversionMainPanel(
-        display_preferences=GuiDisplayPreferences(theme=theme)
-    )
-    combo = panel.findChild(QComboBox, "outputKindCombo")
-
-    _assert_combo_popup_style(combo, surface=surface, text=text)
-    _assert_combo_delegate_paints_visible_text(combo, surface=surface)
-
-    panel.close()
-    app.quit()
-
-
-def test_combo_popup_view_stays_stable_across_theme_language_and_reopen():
-    app = create_application(["texbook-gui-test"])
-    panel = ConversionMainPanel()
-    combo = panel.findChild(FocusWheelComboBox, "outputKindCombo")
-    popup_view = combo.view()
-
-    _assert_combo_popup_style(combo, surface="#ffffff", text="#1f2328")
-    combo.hidePopup()
-
-    panel.toggle_theme()
-    panel.toggle_language()
-
-    assert combo.view() is popup_view
-    _assert_combo_popup_style(combo, surface="#24272d", text="#edf1f7")
-    combo.hidePopup()
-    combo.showPopup()
-    try:
-        assert combo.view() is popup_view
-        assert combo.view().isVisible()
-    finally:
-        combo.hidePopup()
-
-    panel.close()
-    app.quit()
-
-
-def test_settings_dialog_font_combo_popup_gets_direct_theme_style():
-    app = create_application(["texbook-gui-test"])
-    dialog = SettingsDialog(
-        preferences=GuiDisplayPreferences(
-            theme=GuiThemeMode.dark,
-            language=GuiLanguage.zh_CN,
-            font_family="Segoe UI",
-            font_point_size=13,
-        )
-    )
-    combo = dialog.findChild(QComboBox, "settingsFontFamilyCombo")
-
-    _assert_combo_popup_style(combo, surface="#24272d", text="#edf1f7")
-
-    dialog.close()
-    app.quit()
+    assert 'QWidget[choiceGroup="true"]:disabled QCheckBox' in stylesheet
 
 
 def test_main_window_has_basic_lifecycle_shell():
@@ -433,138 +303,27 @@ def test_main_window_about_action_opens_about_dialog(monkeypatch):
     app.quit()
 
 
-def test_main_window_closes_combo_popups_on_state_changes():
+def test_main_window_closes_transient_dialogs_on_state_changes(monkeypatch):
     app = create_application(["texbook-gui-test"])
     window = MainWindow()
-    panel = window.centralWidget()
-    assert isinstance(panel, ConversionMainPanel)
-    combo = PopupTrackingComboBox(panel)
-    combo.addItems(["one", "two"])
-    combo.show()
-    window.show()
-
-    panel.close_popups()
-
-    assert combo.hide_popup_calls == 0
-
-    combo.showPopup()
-    panel.close_popups()
-
-    assert combo.hide_popup_calls == 1
-
-    combo.showPopup()
+    dialog = SettingsDialog(window, preferences=GuiDisplayPreferences())
+    closed = []
+    monkeypatch.setattr(dialog, "close", lambda: closed.append(True) or True)
+    window._open_dialogs.append(dialog)
 
     window.changeEvent(QEvent(QEvent.Type.WindowStateChange))
 
-    assert combo.hide_popup_calls == 2
+    assert closed == [True]
 
-    combo.showPopup()
-
-    window.changeEvent(QEvent(QEvent.Type.ActivationChange))
-
-    assert combo.hide_popup_calls == 3
-
-    combo.showPopup()
-
-    calls_before_hide = combo.hide_popup_calls
-    window.hide()
-
-    assert combo.hide_popup_calls >= calls_before_hide + 1
-    assert combo.view().isVisible() is False
-    combo.showPopup()
-    try:
-        assert combo.view().isVisible() is True
-    finally:
-        combo.hidePopup()
-
-    window.close()
     app.quit()
 
 
-def test_app_level_popup_cleanup_covers_settings_dialog_combo():
-    app = create_application(["texbook-gui-test"])
-    window = MainWindow()
-    dialog = SettingsDialog(
-        window,
-        preferences=GuiDisplayPreferences(
-            theme=GuiThemeMode.dark,
-            language=GuiLanguage.zh_CN,
-            font_family="Segoe UI",
-            font_point_size=13,
-        ),
-    )
-    dialog.show()
-    combo = dialog.findChild(FocusWheelComboBox, "settingsFontFamilyCombo")
-    combo.showPopup()
-
-    close_combo_popups()
-
-    assert combo.view().isVisible() is False
-    combo.showPopup()
-    try:
-        assert combo.view().isVisible() is True
-    finally:
-        combo.hidePopup()
-
-    dialog.close()
-    window.close()
-    app.quit()
-
-
-def test_settings_dialog_closes_font_combo_popup_on_lifecycle_events():
+def test_settings_dialog_updates_font_size_preference():
     app = create_application(["texbook-gui-test"])
     dialog = SettingsDialog(
         preferences=GuiDisplayPreferences(
             theme=GuiThemeMode.dark,
             language=GuiLanguage.zh_CN,
-            font_family="Segoe UI",
-            font_point_size=13,
-        )
-    )
-    combo = TrackingFocusWheelComboBox(dialog)
-    combo.addItems(["one", "two"])
-    combo.show()
-    dialog.show()
-
-    close_combo_popups(dialog)
-
-    assert combo.hide_popup_calls == 0
-
-    combo.showPopup()
-    dialog.changeEvent(QEvent(QEvent.Type.ActivationChange))
-
-    assert combo.hide_popup_calls == 1
-    assert combo.view().isVisible() is False
-
-    combo.showPopup()
-    assert combo.view().isVisible() is True
-
-    calls_before_hide = combo.hide_popup_calls
-    dialog.hide()
-
-    assert combo.hide_popup_calls >= calls_before_hide + 1
-    assert combo.view().isVisible() is False
-
-    dialog.show()
-    combo.showPopup()
-    assert combo.view().isVisible() is True
-
-    calls_before_close = combo.hide_popup_calls
-    dialog.close()
-
-    assert combo.hide_popup_calls >= calls_before_close + 1
-    assert combo.view().isVisible() is False
-
-    app.quit()
-
-
-def test_settings_dialog_updates_font_preferences():
-    app = create_application(["texbook-gui-test"])
-    dialog = SettingsDialog(
-        preferences=GuiDisplayPreferences(
-            theme=GuiThemeMode.dark,
-            language=GuiLanguage.zh_CN,
-            font_family="Segoe UI",
             font_point_size=13,
         )
     )
@@ -572,28 +331,26 @@ def test_settings_dialog_updates_font_preferences():
     assert dialog.windowTitle() == "GUI 设置"
     assert not dialog.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint
     assert not dialog.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint
+    assert dialog.findChild(QWidget, "settingsFontFamilyCombo") is None
 
-    dialog.findChild(QComboBox, "settingsFontFamilyCombo").setCurrentText("Arial")
     dialog.findChild(QSpinBox, "settingsFontSizeSpinBox").setValue(15)
     dialog._accept()
     preferences = dialog.selected_preferences()
 
     assert preferences.theme == GuiThemeMode.dark
     assert preferences.language == GuiLanguage.zh_CN
-    assert preferences.font_family == "Arial"
     assert preferences.font_point_size == 15
 
     dialog.close()
     app.quit()
 
 
-def test_settings_dialog_reset_button_resets_only_display_font_preferences():
+def test_settings_dialog_reset_button_resets_only_display_font_size():
     app = create_application(["texbook-gui-test"])
     dialog = SettingsDialog(
         preferences=GuiDisplayPreferences(
             theme=GuiThemeMode.dark,
             language=GuiLanguage.zh_CN,
-            font_family="Arial",
             font_point_size=15,
         )
     )
@@ -604,7 +361,6 @@ def test_settings_dialog_reset_button_resets_only_display_font_preferences():
 
     assert preferences.theme == GuiThemeMode.dark
     assert preferences.language == GuiLanguage.zh_CN
-    assert preferences.font_family == "Microsoft YaHei UI"
     assert preferences.font_point_size == GUI_BASE_FONT_POINT_SIZE
 
     dialog.close()
@@ -614,33 +370,22 @@ def test_settings_dialog_reset_button_resets_only_display_font_preferences():
 def test_scroll_sensitive_controls_always_ignore_wheel_changes():
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
-    combo = panel.findChild(QComboBox, "outputKindCombo")
     spin = panel.findChild(QSpinBox, "chunkPagesSpinBox")
 
-    combo.setFocus()
     spin.setFocus()
-    combo_event = _FakeWheelEvent()
     spin_event = _FakeWheelEvent()
 
-    combo.wheelEvent(combo_event)
     spin.wheelEvent(spin_event)
 
-    assert combo_event.ignored is True
     assert spin_event.ignored is True
-    assert combo.currentText() == "单个 .tex"
     assert spin.value() == 4
 
-    combo.clearFocus()
     spin.clearFocus()
-    second_combo_event = _FakeWheelEvent()
     second_spin_event = _FakeWheelEvent()
 
-    combo.wheelEvent(second_combo_event)
     spin.wheelEvent(second_spin_event)
 
-    assert second_combo_event.ignored is True
     assert second_spin_event.ignored is True
-    assert combo.currentText() == "单个 .tex"
     assert spin.value() == 4
 
     panel.close()
@@ -673,7 +418,7 @@ def test_clicking_non_field_widget_clears_control_focus():
     app.quit()
 
 
-def test_main_window_settings_button_applies_font_preferences(monkeypatch):
+def test_main_window_settings_button_applies_font_size_preference(monkeypatch):
     app = create_application(["texbook-gui-test"])
     window = MainWindow()
     panel = window.centralWidget()
@@ -688,17 +433,15 @@ def test_main_window_settings_button_applies_font_preferences(monkeypatch):
         lambda self: GuiDisplayPreferences(
             theme=GuiThemeMode.light,
             language=GuiLanguage.zh_CN,
-            font_family="Arial",
             font_point_size=14,
         ),
     )
 
     panel.findChild(QToolButton, "settingsButton").click()
 
-    assert panel.current_display_preferences().font_family == "Arial"
     assert panel.current_display_preferences().font_point_size == 14
     assert app.font().pointSize() == 14
-    assert 'font-family: "Arial"' in window.styleSheet()
+    assert 'font-family: "Microsoft YaHei UI"' in window.styleSheet()
 
     window.close()
     app.quit()
@@ -751,14 +494,15 @@ def test_conversion_panel_exposes_future_task_control_points():
         "pdfInputBrowseButton",
         "outputDirectoryField",
         "outputBrowseButton",
-        "outputKindCombo",
+        "inputTypeChoices",
+        "outputKindChoices",
         "batchPatternField",
         "pageOptionsPanel",
         "pagesField",
         "manualTitleField",
-        "titleSourceCombo",
-        "documentClassCombo",
-        "structureModeCombo",
+        "titleSourceChoices",
+        "documentClassChoices",
+        "structureModeChoices",
         "structureChunkPagesSpinBox",
         "structureMaxPagesSpinBox",
         "beamerTitlePageCheckBox",
@@ -766,8 +510,8 @@ def test_conversion_panel_exposes_future_task_control_points():
         "modelField",
         "baseUrlField",
         "apiKeyField",
-        "apiKeySourceCombo",
-        "promptPresetCombo",
+        "apiKeySourceChoices",
+        "promptPresetField",
         "extraPromptEdit",
         "cacheEnabledCheckBox",
         "cacheDirectoryField",
@@ -782,7 +526,7 @@ def test_conversion_panel_exposes_future_task_control_points():
         "imageDpiSpinBox",
         "imageDpiMinSpinBox",
         "imageDpiMaxSpinBox",
-        "imageFormatCombo",
+        "imageFormatChoices",
         "jpegQualitySpinBox",
         "llmRetriesSpinBox",
         "llmRetryInitialDelaySpinBox",
@@ -790,14 +534,45 @@ def test_conversion_panel_exposes_future_task_control_points():
         "timeoutSpinBox",
         "temperatureSpinBox",
         "maxTokensSpinBox",
-        "beamerBoxStyleCombo",
-        "ctexFontProfileCombo",
+        "beamerBoxStyleChoices",
+        "ctexFontProfileChoices",
         "overallProgressBar",
         "taskEmptyStatusLabel",
         "taskListScrollArea",
         "taskRowsContainer",
     ]:
         assert panel.findChild(QWidget, object_name) is not None
+
+    panel.close()
+    app.quit()
+
+
+def test_conversion_panel_uses_inline_choice_groups_instead_of_dropdowns():
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+
+    for object_name in [
+        "inputTypeChoices",
+        "outputKindChoices",
+        "titleSourceChoices",
+        "documentClassChoices",
+        "structureModeChoices",
+        "apiKeySourceChoices",
+        "imageFormatChoices",
+        "beamerBoxStyleChoices",
+        "ctexFontProfileChoices",
+    ]:
+        choices = _choice(panel, object_name)
+        for option in choices.option_buttons():
+            index = choices.layout().indexOf(option)
+            row, column, _row_span, _column_span = choices.layout().getItemPosition(index)
+            assert 0 <= column <= 2
+            assert row >= 0
+            assert isinstance(option, QCheckBox)
+
+    assert len(_choice(panel, "documentClassChoices").option_buttons()) == 7
+    assert panel.findChildren(ChoiceGrid)
+    assert "Combo" not in "".join(child.objectName() for child in panel.findChildren(QWidget))
 
     panel.close()
     app.quit()
@@ -845,7 +620,7 @@ def test_conversion_panel_default_settings_match_cli_defaults():
     assert settings.beamer_box_style == "block"
     assert settings.ctex_font_profile == "default"
     assert panel.validate_settings() == []
-    assert panel.findChild(QComboBox, "promptPresetCombo").isEditable() is True
+    assert panel.findChild(QLineEdit, "promptPresetField").text() == "chinese-math"
 
     panel.close()
     app.quit()
@@ -946,7 +721,7 @@ def test_conversion_panel_supports_environment_api_key_source(monkeypatch):
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
 
-    panel.findChild(QComboBox, "apiKeySourceCombo").setCurrentText("环境变量名")
+    _set_choice(panel, "apiKeySourceChoices", GuiApiKeySource.environment.value)
     panel.findChild(QLineEdit, "apiKeyField").setText("TEXBOOK_GUI_TEST_KEY")
 
     settings = panel.current_settings()
@@ -967,7 +742,7 @@ def test_conversion_panel_supports_environment_api_key_source(monkeypatch):
 def test_conversion_panel_requires_environment_api_key_name_when_using_environment_source():
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
-    panel.findChild(QComboBox, "apiKeySourceCombo").setCurrentText("环境变量名")
+    _set_choice(panel, "apiKeySourceChoices", GuiApiKeySource.environment.value)
     panel.findChild(QLineEdit, "apiKeyField").setText("")
 
     settings = panel.current_settings()
@@ -992,7 +767,7 @@ def test_conversion_panel_validates_pages_and_title_conflict():
 
     panel.findChild(QLineEdit, "pagesField").setText("1,3-5")
     panel.findChild(QLineEdit, "manualTitleField").setText("手动标题")
-    panel.findChild(QComboBox, "titleSourceCombo").setCurrentText("llm")
+    _set_choice(panel, "titleSourceChoices", "llm")
 
     assert panel.findChild(QLineEdit, "manualTitleField").isEnabled() is False
     assert "手动标题不能与 LLM 标题来源同时使用。" in panel.validate_settings()
@@ -1005,22 +780,22 @@ def test_conversion_panel_option_dependencies_follow_mode_cache_and_image_format
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
 
-    assert panel.findChild(QComboBox, "structureModeCombo").isEnabled() is False
+    assert _choice(panel, "structureModeChoices").isEnabled() is False
     assert panel.findChild(QSpinBox, "structureChunkPagesSpinBox").isEnabled() is False
     assert panel.findChild(QSpinBox, "batchWorkersSpinBox").isEnabled() is False
     assert panel.findChild(QLineEdit, "batchPatternField").isEnabled() is False
 
-    panel.findChild(QComboBox, "outputKindCombo").setCurrentText("目录化项目")
+    _set_choice(panel, "outputKindChoices", GuiOutputKind.project.value)
 
     assert panel.current_settings().conversion_mode == GuiConversionMode.project
-    assert panel.findChild(QComboBox, "structureModeCombo").isEnabled() is True
+    assert _choice(panel, "structureModeChoices").isEnabled() is True
     assert panel.findChild(QSpinBox, "structureChunkPagesSpinBox").isEnabled() is True
     assert panel.findChild(QSpinBox, "batchWorkersSpinBox").isEnabled() is False
 
-    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("目录批量")
+    _set_choice(panel, "inputTypeChoices", GuiInputKind.directory.value)
 
     assert panel.current_settings().conversion_mode == GuiConversionMode.project
-    assert panel.findChild(QComboBox, "structureModeCombo").isEnabled() is True
+    assert _choice(panel, "structureModeChoices").isEnabled() is True
     assert panel.findChild(QSpinBox, "batchWorkersSpinBox").isEnabled() is True
     assert panel.findChild(QLineEdit, "batchPatternField").isEnabled() is True
 
@@ -1034,11 +809,11 @@ def test_conversion_panel_option_dependencies_follow_mode_cache_and_image_format
     assert panel.findChild(QCheckBox, "clearCacheCheckBox").isEnabled() is False
     assert panel.current_settings().clear_cache is False
 
-    panel.findChild(QComboBox, "imageFormatCombo").setCurrentText("png")
+    _set_choice(panel, "imageFormatChoices", "png")
 
     assert panel.findChild(QSpinBox, "jpegQualitySpinBox").isEnabled() is False
 
-    panel.findChild(QComboBox, "imageFormatCombo").setCurrentText("jpeg")
+    _set_choice(panel, "imageFormatChoices", "jpeg")
 
     assert panel.findChild(QSpinBox, "jpegQualitySpinBox").isEnabled() is True
 
@@ -1053,10 +828,10 @@ def test_conversion_panel_batch_pattern_only_validates_for_directory_input():
     panel.findChild(QLineEdit, "batchPatternField").setText("")
 
     assert "目录批量匹配模式不能为空。" not in panel.validate_settings()
-    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("目录批量")
+    _set_choice(panel, "inputTypeChoices", GuiInputKind.directory.value)
 
     assert "目录批量匹配模式不能为空。" in panel.validate_settings()
-    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("多个 PDF")
+    _set_choice(panel, "inputTypeChoices", GuiInputKind.multiple_files.value)
 
     assert "目录批量匹配模式不能为空。" not in panel.validate_settings()
 
@@ -1070,9 +845,9 @@ def test_conversion_panel_theme_and_language_switch_keep_stable_values():
     panel = window.centralWidget()
     assert isinstance(panel, ConversionMainPanel)
 
-    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("目录批量")
-    panel.findChild(QComboBox, "outputKindCombo").setCurrentText("目录化项目")
-    panel.findChild(QComboBox, "apiKeySourceCombo").setCurrentText("环境变量名")
+    _set_choice(panel, "inputTypeChoices", GuiInputKind.directory.value)
+    _set_choice(panel, "outputKindChoices", GuiOutputKind.project.value)
+    _set_choice(panel, "apiKeySourceChoices", GuiApiKeySource.environment.value)
     assert panel.current_settings().output_kind == GuiOutputKind.project
     assert panel.current_settings().api_key_source == GuiApiKeySource.environment
 
@@ -1087,11 +862,12 @@ def test_conversion_panel_theme_and_language_switch_keep_stable_values():
     assert panel.current_display_preferences().language == GuiLanguage.en_US
     assert window.windowTitle() == "TeXBook PDF to LaTeX"
     assert panel.findChild(QPushButton, "addTaskButton").text() == "Add Task"
-    assert panel.findChild(QComboBox, "inputTypeCombo").currentText() == "Folder Batch"
-    assert panel.findChild(QComboBox, "inputTypeCombo").currentData() == GuiInputKind.directory.value
-    assert panel.findChild(QComboBox, "outputKindCombo").currentText() == "Project Folder"
+    assert _choice_value(panel, "inputTypeChoices") == GuiInputKind.directory.value
+    assert _choice_value(panel, "outputKindChoices") == GuiOutputKind.project.value
+    assert _choice(panel, "inputTypeChoices").option_buttons()[2].text() == "Folder Batch"
+    assert _choice(panel, "outputKindChoices").option_buttons()[1].text() == "Project Folder"
     assert panel.current_settings().output_kind == GuiOutputKind.project
-    assert panel.findChild(QComboBox, "apiKeySourceCombo").currentText() == "Environment variable"
+    assert _choice(panel, "apiKeySourceChoices").option_buttons()[1].text() == "Environment variable"
     assert panel.current_settings().api_key_source == GuiApiKeySource.environment
     assert window.statusBar().currentMessage() == "API Key environment variable name cannot be empty."
 
@@ -1111,14 +887,13 @@ def test_reset_defaults_keeps_theme_language_paths_and_tasks(monkeypatch):
         GuiDisplayPreferences(
             theme=GuiThemeMode.dark,
             language=GuiLanguage.en_US,
-            font_family="Arial",
             font_point_size=14,
         ),
         emit=True,
     )
     panel.set_path_memory(GuiPathMemory(last_input_directory=r"C:\books"))
     panel.findChild(QLineEdit, "pagesField").setText("1-2")
-    panel.findChild(QComboBox, "outputKindCombo").setCurrentText("Project Folder")
+    _set_choice(panel, "outputKindChoices", GuiOutputKind.project.value)
     panel.set_input_selection(GuiInputSelection.from_single_file("a.pdf"))
     panel.set_output_directory("out/a.tex")
     panel.findChild(QPushButton, "addTaskButton").click()
@@ -1129,7 +904,6 @@ def test_reset_defaults_keeps_theme_language_paths_and_tasks(monkeypatch):
     preferences = panel.current_display_preferences()
     assert preferences.theme == GuiThemeMode.dark
     assert preferences.language == GuiLanguage.en_US
-    assert preferences.font_family == "Arial"
     assert preferences.font_point_size == 14
     assert panel.current_path_memory().last_input_directory == r"C:\books"
     assert len(panel.task_view_states()) == 1
@@ -1291,7 +1065,6 @@ def test_gui_settings_store_round_trips_display_preferences(tmp_path):
         display_preferences=GuiDisplayPreferences(
             theme=GuiThemeMode.dark,
             language=GuiLanguage.en_US,
-            font_family="Segoe UI",
             font_point_size=13,
         ),
     )
@@ -1301,13 +1074,12 @@ def test_gui_settings_store_round_trips_display_preferences(tmp_path):
 
     assert loaded.display_preferences.theme == GuiThemeMode.dark
     assert loaded.display_preferences.language == GuiLanguage.en_US
-    assert loaded.display_preferences.font_family == "Segoe UI"
     assert loaded.display_preferences.font_point_size == 13
 
     raw = store._settings
     raw.setValue("display/theme", "invalid")
     raw.setValue("display/language", "invalid")
-    raw.setValue("display/font_family", "")
+    raw.setValue("display/font_family", "Ignored Legacy Font")
     raw.setValue("display/font_point_size", 4)
 
     loaded = store.load_state()
@@ -1434,7 +1206,7 @@ def test_conversion_panel_multiple_pdf_selection_is_filtered_deduped_and_summari
 ):
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
-    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("多个 PDF")
+    _set_choice(panel, "inputTypeChoices", GuiInputKind.multiple_files.value)
 
     monkeypatch.setattr(
         "texbook.gui.main_panel.QFileDialog.getOpenFileNames",
@@ -1466,7 +1238,7 @@ def test_conversion_panel_multiple_pdf_selection_is_filtered_deduped_and_summari
 def test_conversion_panel_directory_input_uses_directory_selection(monkeypatch):
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
-    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("目录批量")
+    _set_choice(panel, "inputTypeChoices", GuiInputKind.directory.value)
 
     monkeypatch.setattr(
         "texbook.gui.main_panel.QFileDialog.getExistingDirectory",
@@ -1491,7 +1263,7 @@ def test_conversion_panel_switching_input_type_clears_previous_input_only():
 
     assert panel.findChild(QPushButton, "addTaskButton").isEnabled()
 
-    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("目录批量")
+    _set_choice(panel, "inputTypeChoices", GuiInputKind.directory.value)
 
     assert panel.selection_state.input_selection.kind == GuiInputKind.directory
     assert panel.selection_state.input_selection.paths == ()
@@ -1550,7 +1322,7 @@ def test_main_window_restores_and_saves_persistent_gui_state(tmp_path):
     assert panel.task_view_states() == ()
 
     panel.set_input_selection(GuiInputSelection.from_single_file(r"C:\books\lecture.pdf"))
-    panel.findChild(QComboBox, "outputKindCombo").setCurrentText("单个 .tex")
+    _set_choice(panel, "outputKindChoices", GuiOutputKind.tex_file.value)
     panel.set_output_directory(r"D:\tex-output\lecture.tex")
     window.close()
 

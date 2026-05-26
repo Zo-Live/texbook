@@ -42,7 +42,7 @@ def create_application(argv: Sequence[str] | None = None) -> QApplication:
 
 
 def _build_application_font(current_font: QFont) -> QFont:
-    return build_gui_font(GUI_FONT_FAMILIES[0], GUI_BASE_FONT_POINT_SIZE, current_font=current_font)
+    return build_gui_font(GUI_BASE_FONT_POINT_SIZE, current_font=current_font)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

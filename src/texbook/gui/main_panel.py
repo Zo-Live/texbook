@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QAbstractSpinBox,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -29,7 +28,6 @@ from PySide6.QtWidgets import (
 
 from texbook.gui.executor import GuiOverwriteConfirmationRequest, GuiTaskExecutor
 from texbook.gui.display import (
-    DEFAULT_GUI_FONT_FAMILY,
     DEFAULT_GUI_FONT_POINT_SIZE,
     GuiDisplayPreferences,
     GuiLanguage,
@@ -76,8 +74,7 @@ from texbook.gui.tasks import (
     task_status_label,
 )
 from texbook.gui.widgets import (
-    close_combo_popups,
-    FocusWheelComboBox,
+    ChoiceGrid,
     FocusWheelDoubleSpinBox,
     FocusWheelSpinBox,
     InlineField,
@@ -85,7 +82,7 @@ from texbook.gui.widgets import (
     OptionGrid,
     SectionPanel,
 )
-from texbook.gui.theme import build_combo_popup_style, build_fluent_stylesheet
+from texbook.gui.theme import build_fluent_stylesheet
 from texbook.llm.scheduler import ProgressEvent
 
 
@@ -275,33 +272,30 @@ class ConversionMainPanel(QWidget):
     ) -> None:
         self._row_labels[key] = grid.add_row("", control)
 
-    def _set_combo_items(
+    def _set_choice_items(
         self,
-        combo: QComboBox,
+        choices: ChoiceGrid,
         items: tuple[tuple[str, str], ...],
         current_value: str | None = None,
     ) -> None:
-        value = current_value if current_value is not None else self._combo_value(combo)
-        blocker = QSignalBlocker(combo)
-        combo.clear()
-        for item_value, label_key in items:
-            combo.addItem(self._tr(label_key), item_value)
-        if value:
-            self._set_combo_value(combo, value)
+        value = current_value if current_value is not None else choices.value()
+        blocker = QSignalBlocker(choices)
+        choices.set_items(
+            tuple((item_value, self._tr(label_key)) for item_value, label_key in items),
+            current_value=value,
+        )
         del blocker
 
-    def _combo_value(self, combo: QComboBox) -> str:
-        data = combo.currentData()
-        if data is not None:
-            return str(data)
-        return combo.currentText()
-
-    def _set_combo_value(self, combo: QComboBox, value: str) -> None:
-        index = combo.findData(value)
-        if index < 0:
-            index = combo.findText(value)
-        if index >= 0:
-            combo.setCurrentIndex(index)
+    def _set_plain_choice_items(
+        self,
+        choices: ChoiceGrid,
+        values: tuple[str, ...],
+        current_value: str | None = None,
+    ) -> None:
+        value = current_value if current_value is not None else choices.value()
+        blocker = QSignalBlocker(choices)
+        choices.set_items(tuple((item, item) for item in values), current_value=value)
+        del blocker
 
     def _create_input_panel(self) -> SectionPanel:
         panel = self._register_section(
@@ -322,10 +316,10 @@ class ConversionMainPanel(QWidget):
         self.pdf_input_browse_button = browse
         self._add_grid_row(grid, "field.pdf_input", InlineField(pdf_input, browse, parent=panel))
 
-        input_type = FocusWheelComboBox(panel)
-        input_type.setObjectName("inputTypeCombo")
-        self._set_combo_items(input_type, _INPUT_KIND_ITEMS, GuiInputKind.single_file.value)
-        self.input_type_combo = input_type
+        input_type = ChoiceGrid(panel)
+        input_type.setObjectName("inputTypeChoices")
+        self._set_choice_items(input_type, _INPUT_KIND_ITEMS, GuiInputKind.single_file.value)
+        self.input_type_choices = input_type
         self._add_grid_row(grid, "field.input_type", input_type)
 
         batch_pattern = QLineEdit(panel)
@@ -345,10 +339,10 @@ class ConversionMainPanel(QWidget):
         )
         grid = OptionGrid(parent=panel)
 
-        output_kind = FocusWheelComboBox(panel)
-        output_kind.setObjectName("outputKindCombo")
-        self._set_combo_items(output_kind, _OUTPUT_KIND_ITEMS, GuiOutputKind.tex_file.value)
-        self.output_kind_combo = output_kind
+        output_kind = ChoiceGrid(panel)
+        output_kind.setObjectName("outputKindChoices")
+        self._set_choice_items(output_kind, _OUTPUT_KIND_ITEMS, GuiOutputKind.tex_file.value)
+        self.output_kind_choices = output_kind
         self._add_grid_row(grid, "field.output_kind", output_kind)
 
         output_dir = QLineEdit(panel)
@@ -389,10 +383,10 @@ class ConversionMainPanel(QWidget):
         self.manual_title_field = manual_title
         self._add_grid_row(grid, "field.manual_title", manual_title)
 
-        title_source = FocusWheelComboBox(panel)
-        title_source.setObjectName("titleSourceCombo")
-        title_source.addItems(["filename", "llm"])
-        self.title_source_combo = title_source
+        title_source = ChoiceGrid(panel)
+        title_source.setObjectName("titleSourceChoices")
+        self._set_plain_choice_items(title_source, ("filename", "llm"), "filename")
+        self.title_source_choices = title_source
         self._add_grid_row(grid, "field.title_source", title_source)
 
         show_date = QCheckBox(panel)
@@ -410,18 +404,20 @@ class ConversionMainPanel(QWidget):
         )
         grid = OptionGrid(parent=panel)
 
-        document_class = FocusWheelComboBox(panel)
-        document_class.setObjectName("documentClassCombo")
-        document_class.addItems(
-            ["auto", "ctexart", "ctexbook", "ctexbeamer", "article", "book", "beamer"]
+        document_class = ChoiceGrid(panel)
+        document_class.setObjectName("documentClassChoices")
+        self._set_plain_choice_items(
+            document_class,
+            ("auto", "ctexart", "ctexbook", "ctexbeamer", "article", "book", "beamer"),
+            "auto",
         )
-        self.document_class_combo = document_class
+        self.document_class_choices = document_class
         self._add_grid_row(grid, "field.document_class", document_class)
 
-        structure = FocusWheelComboBox(panel)
-        structure.setObjectName("structureModeCombo")
-        structure.addItems(["auto", "off", "local", "llm"])
-        self.structure_mode_combo = structure
+        structure = ChoiceGrid(panel)
+        structure.setObjectName("structureModeChoices")
+        self._set_plain_choice_items(structure, ("auto", "off", "local", "llm"), "auto")
+        self.structure_mode_choices = structure
         self._add_grid_row(grid, "field.structure", structure)
 
         structure_chunk_pages = self._make_spin_box("structureChunkPagesSpinBox", 1, 128, 8)
@@ -465,18 +461,17 @@ class ConversionMainPanel(QWidget):
         api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_field = api_key
 
-        api_key_source = FocusWheelComboBox(panel)
-        api_key_source.setObjectName("apiKeySourceCombo")
-        self._set_combo_items(api_key_source, _API_KEY_SOURCE_ITEMS, GuiApiKeySource.direct.value)
-        self.api_key_source_combo = api_key_source
+        api_key_source = ChoiceGrid(panel)
+        api_key_source.setObjectName("apiKeySourceChoices")
+        self._set_choice_items(api_key_source, _API_KEY_SOURCE_ITEMS, GuiApiKeySource.direct.value)
+        self.api_key_source_choices = api_key_source
         self._add_grid_row(grid, "field.key_source", api_key_source)
         grid.add_row("API Key", api_key)
 
-        preset = FocusWheelComboBox(panel)
-        preset.setObjectName("promptPresetCombo")
-        preset.setEditable(True)
-        preset.addItem("chinese-math")
-        self.prompt_preset_combo = preset
+        preset = QLineEdit(panel)
+        preset.setObjectName("promptPresetField")
+        preset.setText("chinese-math")
+        self.prompt_preset_field = preset
         self._add_grid_row(grid, "field.prompt_preset", preset)
 
         extra_prompt = QTextEdit(panel)
@@ -566,11 +561,10 @@ class ConversionMainPanel(QWidget):
         self.image_dpi_max_spin_box = image_dpi_max
         self._add_grid_row(grid, "field.image_dpi_max", image_dpi_max)
 
-        image_format = FocusWheelComboBox(panel)
-        image_format.setObjectName("imageFormatCombo")
-        image_format.addItems(["auto", "png", "jpeg"])
-        image_format.setCurrentText("png")
-        self.image_format_combo = image_format
+        image_format = ChoiceGrid(panel)
+        image_format.setObjectName("imageFormatChoices")
+        self._set_plain_choice_items(image_format, ("auto", "png", "jpeg"), "png")
+        self.image_format_choices = image_format
         self._add_grid_row(grid, "field.image_format", image_format)
 
         jpeg_quality = self._make_spin_box("jpegQualitySpinBox", 1, 100, 85)
@@ -624,16 +618,16 @@ class ConversionMainPanel(QWidget):
         self.max_tokens_spin_box = max_tokens
         grid.add_row("Max tokens", max_tokens)
 
-        beamer_style = FocusWheelComboBox(panel)
-        beamer_style.setObjectName("beamerBoxStyleCombo")
-        beamer_style.addItems(["block", "tcolorbox"])
-        self.beamer_box_style_combo = beamer_style
+        beamer_style = ChoiceGrid(panel)
+        beamer_style.setObjectName("beamerBoxStyleChoices")
+        self._set_plain_choice_items(beamer_style, ("block", "tcolorbox"), "block")
+        self.beamer_box_style_choices = beamer_style
         self._add_grid_row(grid, "field.beamer_box", beamer_style)
 
-        ctex_font = FocusWheelComboBox(panel)
-        ctex_font.setObjectName("ctexFontProfileCombo")
-        ctex_font.addItems(["default", "local"])
-        self.ctex_font_profile_combo = ctex_font
+        ctex_font = ChoiceGrid(panel)
+        ctex_font.setObjectName("ctexFontProfileChoices")
+        self._set_plain_choice_items(ctex_font, ("default", "local"), "default")
+        self.ctex_font_profile_choices = ctex_font
         self._add_grid_row(grid, "field.ctex_font", ctex_font)
 
         panel.body_layout.addWidget(grid)
@@ -779,24 +773,24 @@ class ConversionMainPanel(QWidget):
         self.reset_defaults_button.clicked.connect(
             lambda _checked=False: self.reset_defaults_requested.emit()
         )
-        self.input_type_combo.currentTextChanged.connect(self._change_input_kind)
-        self.output_kind_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.input_type_choices.value_changed.connect(self._change_input_kind)
+        self.output_kind_choices.value_changed.connect(self._sync_gui_state)
         self.batch_pattern_field.textChanged.connect(self._sync_gui_state)
         self.add_task_button.clicked.connect(self.add_current_tasks)
         self.start_button.clicked.connect(self.start_pending_tasks)
-        self.title_source_combo.currentTextChanged.connect(self._sync_gui_state)
-        self.structure_mode_combo.currentTextChanged.connect(self._sync_gui_state)
-        self.document_class_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.title_source_choices.value_changed.connect(self._sync_gui_state)
+        self.structure_mode_choices.value_changed.connect(self._sync_gui_state)
+        self.document_class_choices.value_changed.connect(self._sync_gui_state)
         self.cache_enabled_checkbox.toggled.connect(self._sync_cache_controls)
-        self.image_format_combo.currentTextChanged.connect(self._sync_image_controls)
+        self.image_format_choices.value_changed.connect(self._sync_image_controls)
         self.cache_directory_field.textChanged.connect(self._sync_gui_state)
         self.pages_field.textChanged.connect(self._sync_gui_state)
         self.manual_title_field.textChanged.connect(self._sync_gui_state)
         self.model_field.textChanged.connect(self._sync_gui_state)
         self.base_url_field.textChanged.connect(self._sync_gui_state)
         self.api_key_field.textChanged.connect(self._sync_gui_state)
-        self.api_key_source_combo.currentTextChanged.connect(self._sync_api_key_controls)
-        self.prompt_preset_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.api_key_source_choices.value_changed.connect(self._sync_api_key_controls)
+        self.prompt_preset_field.textChanged.connect(self._sync_gui_state)
         self.extra_prompt_edit.textChanged.connect(self._sync_gui_state)
         self.confirm_overwrite_checkbox.toggled.connect(self._sync_gui_state)
         self.show_date_checkbox.toggled.connect(self._sync_gui_state)
@@ -819,8 +813,8 @@ class ConversionMainPanel(QWidget):
         self.timeout_spin_box.valueChanged.connect(self._sync_gui_state)
         self.temperature_spin_box.valueChanged.connect(self._sync_gui_state)
         self.max_tokens_spin_box.valueChanged.connect(self._sync_gui_state)
-        self.beamer_box_style_combo.currentTextChanged.connect(self._sync_gui_state)
-        self.ctex_font_profile_combo.currentTextChanged.connect(self._sync_gui_state)
+        self.beamer_box_style_choices.value_changed.connect(self._sync_gui_state)
+        self.ctex_font_profile_choices.value_changed.connect(self._sync_gui_state)
 
         self._sync_image_controls()
         self._sync_cache_controls()
@@ -830,10 +824,6 @@ class ConversionMainPanel(QWidget):
     def current_display_preferences(self) -> GuiDisplayPreferences:
         """Return current theme and language preferences."""
         return self._display_preferences
-
-    def close_popups(self) -> None:
-        """Close transient combo-box popups owned by this panel."""
-        close_combo_popups(self)
 
     def eventFilter(self, watched: object, event: object) -> bool:
         if isinstance(event, QEvent) and event.type() == QEvent.Type.MouseButtonPress:
@@ -867,7 +857,6 @@ class ConversionMainPanel(QWidget):
             GuiDisplayPreferences(
                 theme=next_theme,
                 language=self._language,
-                font_family=self._display_preferences.font_family,
                 font_point_size=self._display_preferences.font_point_size,
             ),
             emit=True,
@@ -882,7 +871,6 @@ class ConversionMainPanel(QWidget):
             GuiDisplayPreferences(
                 theme=self._theme,
                 language=next_language,
-                font_family=self._display_preferences.font_family,
                 font_point_size=self._display_preferences.font_point_size,
             ),
             emit=True,
@@ -891,7 +879,6 @@ class ConversionMainPanel(QWidget):
     def _apply_theme(self) -> None:
         self.setFont(
             build_gui_font(
-                self._display_preferences.font_family or DEFAULT_GUI_FONT_FAMILY,
                 self._display_preferences.font_point_size or DEFAULT_GUI_FONT_POINT_SIZE,
                 current_font=self.font(),
             )
@@ -899,17 +886,9 @@ class ConversionMainPanel(QWidget):
         self.setStyleSheet(
             build_fluent_stylesheet(
                 self._theme,
-                font_family=self._display_preferences.font_family,
                 font_point_size=self._display_preferences.font_point_size,
             )
         )
-        popup_style = build_combo_popup_style(
-            self._theme,
-            font_family=self._display_preferences.font_family,
-            font_point_size=self._display_preferences.font_point_size,
-        )
-        for combo_box in self.findChildren(FocusWheelComboBox):
-            combo_box.set_popup_style(popup_style)
 
     def _retranslate_ui(self) -> None:
         self.subtitle_label.setText(self._tr("command.subtitle"))
@@ -964,9 +943,9 @@ class ConversionMainPanel(QWidget):
         self.cache_enabled_checkbox.setText(self._tr("checkbox.cache_enabled"))
         self.clear_cache_checkbox.setText(self._tr("checkbox.clear_cache"))
 
-        self._set_combo_items(self.input_type_combo, _INPUT_KIND_ITEMS)
-        self._set_combo_items(self.output_kind_combo, _OUTPUT_KIND_ITEMS)
-        self._set_combo_items(self.api_key_source_combo, _API_KEY_SOURCE_ITEMS)
+        self._set_choice_items(self.input_type_choices, _INPUT_KIND_ITEMS)
+        self._set_choice_items(self.output_kind_choices, _OUTPUT_KIND_ITEMS)
+        self._set_choice_items(self.api_key_source_choices, _API_KEY_SOURCE_ITEMS)
         self._sync_api_key_controls()
 
         for status, metric in self._metric_pills.items():
@@ -1133,19 +1112,19 @@ class ConversionMainPanel(QWidget):
         return path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
     def _current_input_kind(self) -> GuiInputKind:
-        return GuiInputKind(self._combo_value(self.input_type_combo))
+        return GuiInputKind(self.input_type_choices.value())
 
     def _current_conversion_mode(self) -> GuiConversionMode:
         return self._current_output_kind()
 
     def _current_output_kind(self) -> GuiOutputKind:
-        return GuiOutputKind(self._combo_value(self.output_kind_combo))
+        return GuiOutputKind(self.output_kind_choices.value())
 
     def _current_api_key_source(self) -> GuiApiKeySource:
-        return GuiApiKeySource(self._combo_value(self.api_key_source_combo))
+        return GuiApiKeySource(self.api_key_source_choices.value())
 
     def _set_conversion_mode(self, mode: GuiConversionMode) -> None:
-        self._set_combo_value(self.output_kind_combo, mode.value)
+        self.output_kind_choices.set_value(mode.value)
         self._sync_gui_state()
 
     def _refresh_mode_controls(self) -> None:
@@ -1154,7 +1133,7 @@ class ConversionMainPanel(QWidget):
         self.batch_pattern_field.setEnabled(self._current_input_kind() == GuiInputKind.directory)
 
         project_mode = self._current_output_kind() == GuiOutputKind.project
-        self.structure_mode_combo.setEnabled(project_mode)
+        self.structure_mode_choices.setEnabled(project_mode)
         self.structure_chunk_pages_spin_box.setEnabled(project_mode)
         self.structure_max_pages_spin_box.setEnabled(project_mode)
 
@@ -1168,8 +1147,9 @@ class ConversionMainPanel(QWidget):
         self._sync_gui_state()
 
     def _sync_image_controls(self) -> None:
-        is_jpeg = self.image_format_combo.currentText() == "jpeg"
-        self.jpeg_quality_spin_box.setEnabled(is_jpeg or self.image_format_combo.currentText() == "auto")
+        image_format = self.image_format_choices.value()
+        is_jpeg = image_format == "jpeg"
+        self.jpeg_quality_spin_box.setEnabled(is_jpeg or image_format == "auto")
         self._sync_gui_state()
 
     def _sync_api_key_controls(self) -> None:
@@ -1197,12 +1177,12 @@ class ConversionMainPanel(QWidget):
             and any(state.status == GuiTaskStatus.pending for state in self._task_states.values())
         )
         single_input = self._current_input_kind() == GuiInputKind.single_file
-        self.manual_title_field.setEnabled(single_input and self._combo_value(self.title_source_combo) != "llm")
+        self.manual_title_field.setEnabled(single_input and self.title_source_choices.value() != "llm")
         self.show_date_checkbox.setEnabled(True)
-        self.beamer_title_page_checkbox.setEnabled(self.document_class_combo.currentText() in {"beamer", "ctexbeamer"})
+        self.beamer_title_page_checkbox.setEnabled(self.document_class_choices.value() in {"beamer", "ctexbeamer"})
 
         project_mode = self._current_output_kind() == GuiOutputKind.project
-        self.structure_mode_combo.setEnabled(project_mode)
+        self.structure_mode_choices.setEnabled(project_mode)
         self.structure_chunk_pages_spin_box.setEnabled(project_mode)
         self.structure_max_pages_spin_box.setEnabled(project_mode)
         self.batch_workers_spin_box.setEnabled(self._current_input_kind() != GuiInputKind.single_file)
@@ -1228,19 +1208,19 @@ class ConversionMainPanel(QWidget):
             confirm_overwrite=self.confirm_overwrite_checkbox.isChecked(),
             batch_pattern=self.batch_pattern_field.text(),
             pages=self.pages_field.text(),
-            document_class=self.document_class_combo.currentText(),
-            structure_mode=self.structure_mode_combo.currentText(),
+            document_class=self.document_class_choices.value(),
+            structure_mode=self.structure_mode_choices.value(),
             structure_chunk_pages=self.structure_chunk_pages_spin_box.value(),
             structure_max_pages=self.structure_max_pages_spin_box.value(),
             manual_title=self.manual_title_field.text(),
-            title_source=self.title_source_combo.currentText(),
+            title_source=self.title_source_choices.value(),
             show_date=self.show_date_checkbox.isChecked(),
             beamer_title_page=self.beamer_title_page_checkbox.isChecked(),
             model=self.model_field.text(),
             base_url=self.base_url_field.text(),
             api_key=self.api_key_field.text(),
             api_key_source=self._current_api_key_source(),
-            prompt_preset=self.prompt_preset_combo.currentText(),
+            prompt_preset=self.prompt_preset_field.text(),
             extra_prompt=self.extra_prompt_edit.toPlainText(),
             temperature=self.temperature_spin_box.value(),
             timeout_seconds=None if self.timeout_spin_box.value() == 0 else self.timeout_spin_box.value(),
@@ -1256,35 +1236,35 @@ class ConversionMainPanel(QWidget):
             image_dpi=self.image_dpi_spin_box.value(),
             image_dpi_min=self.image_dpi_min_spin_box.value(),
             image_dpi_max=None if self.image_dpi_max_spin_box.value() == 0 else self.image_dpi_max_spin_box.value(),
-            image_format=self.image_format_combo.currentText(),
+            image_format=self.image_format_choices.value(),
             jpeg_quality=self.jpeg_quality_spin_box.value(),
             llm_retries=self.llm_retries_spin_box.value(),
             llm_retry_initial_delay=self.llm_retry_initial_delay_spin_box.value(),
             llm_retry_max_delay=self.llm_retry_max_delay_spin_box.value(),
-            beamer_box_style=self.beamer_box_style_combo.currentText(),
-            ctex_font_profile=self.ctex_font_profile_combo.currentText(),
+            beamer_box_style=self.beamer_box_style_choices.value(),
+            ctex_font_profile=self.ctex_font_profile_choices.value(),
         )
 
     def set_settings(self, settings: GuiConversionSettings) -> None:
         self.selection_state = settings.path_state
-        self._set_combo_value(self.input_type_combo, settings.path_state.input_selection.kind.value)
-        self._set_combo_value(self.output_kind_combo, settings.output_kind.value)
+        self.input_type_choices.set_value(settings.path_state.input_selection.kind.value)
+        self.output_kind_choices.set_value(settings.output_kind.value)
         self.confirm_overwrite_checkbox.setChecked(settings.confirm_overwrite)
         self.batch_pattern_field.setText(settings.batch_pattern)
         self.pages_field.setText(settings.pages)
-        self.document_class_combo.setCurrentText(settings.document_class)
-        self.structure_mode_combo.setCurrentText(settings.structure_mode)
+        self.document_class_choices.set_value(settings.document_class)
+        self.structure_mode_choices.set_value(settings.structure_mode)
         self.structure_chunk_pages_spin_box.setValue(settings.structure_chunk_pages)
         self.structure_max_pages_spin_box.setValue(settings.structure_max_pages)
         self.manual_title_field.setText(settings.manual_title)
-        self.title_source_combo.setCurrentText(settings.title_source)
+        self.title_source_choices.set_value(settings.title_source)
         self.show_date_checkbox.setChecked(settings.show_date)
         self.beamer_title_page_checkbox.setChecked(settings.beamer_title_page)
         self.model_field.setText(settings.model)
         self.base_url_field.setText(settings.base_url)
         self.api_key_field.setText(settings.api_key)
-        self._set_combo_value(self.api_key_source_combo, settings.api_key_source.value)
-        self.prompt_preset_combo.setCurrentText(settings.prompt_preset)
+        self.api_key_source_choices.set_value(settings.api_key_source.value)
+        self.prompt_preset_field.setText(settings.prompt_preset)
         self.extra_prompt_edit.setPlainText(settings.extra_prompt)
         self.temperature_spin_box.setValue(settings.temperature)
         self.timeout_spin_box.setValue(0.0 if settings.timeout_seconds is None else settings.timeout_seconds)
@@ -1300,13 +1280,13 @@ class ConversionMainPanel(QWidget):
         self.image_dpi_spin_box.setValue(settings.image_dpi)
         self.image_dpi_min_spin_box.setValue(settings.image_dpi_min)
         self.image_dpi_max_spin_box.setValue(0 if settings.image_dpi_max is None else settings.image_dpi_max)
-        self.image_format_combo.setCurrentText(settings.image_format)
+        self.image_format_choices.set_value(settings.image_format)
         self.jpeg_quality_spin_box.setValue(settings.jpeg_quality)
         self.llm_retries_spin_box.setValue(settings.llm_retries)
         self.llm_retry_initial_delay_spin_box.setValue(settings.llm_retry_initial_delay)
         self.llm_retry_max_delay_spin_box.setValue(settings.llm_retry_max_delay)
-        self.beamer_box_style_combo.setCurrentText(settings.beamer_box_style)
-        self.ctex_font_profile_combo.setCurrentText(settings.ctex_font_profile)
+        self.beamer_box_style_choices.set_value(settings.beamer_box_style)
+        self.ctex_font_profile_choices.set_value(settings.ctex_font_profile)
         self._sync_api_key_controls()
         self._sync_cache_controls()
         self._sync_image_controls()

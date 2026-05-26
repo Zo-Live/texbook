@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QCloseEvent, QFontDatabase, QHideEvent, QShowEvent
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -16,14 +14,11 @@ from PySide6.QtWidgets import (
 )
 
 from texbook.gui.display import (
-    DEFAULT_GUI_FONT_FAMILY,
     DEFAULT_GUI_FONT_POINT_SIZE,
-    GUI_FONT_FALLBACKS,
     GuiDisplayPreferences,
 )
 from texbook.gui.i18n import tr
-from texbook.gui.theme import build_combo_popup_style
-from texbook.gui.widgets import FocusWheelComboBox, FocusWheelSpinBox, close_combo_popups
+from texbook.gui.widgets import FocusWheelSpinBox
 
 
 class AboutDialog(QDialog):
@@ -83,7 +78,6 @@ class SettingsDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.MSWindowsFixedSizeDialogHint, True)
         self.setModal(True)
         self._initial_preferences = preferences
-        self._suppress_popup_event_cleanup = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -99,21 +93,6 @@ class SettingsDialog(QDialog):
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
-
-        self.font_family_combo = FocusWheelComboBox(self)
-        self.font_family_combo.setEditable(True)
-        self.font_family_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.font_family_combo.setObjectName("settingsFontFamilyCombo")
-        self.font_family_combo.addItems(self._font_candidates())
-        self.font_family_combo.setCurrentText(preferences.font_family)
-        self.font_family_combo.set_popup_style(
-            build_combo_popup_style(
-                self._preferences.theme,
-                font_family=self._preferences.font_family,
-                font_point_size=self._preferences.font_point_size,
-            )
-        )
-        form.addRow(tr(self._preferences.language, "dialog.settings.font_family"), self.font_family_combo)
 
         self.font_point_size_spin = FocusWheelSpinBox(self)
         self.font_point_size_spin.setObjectName("settingsFontSizeSpinBox")
@@ -136,29 +115,14 @@ class SettingsDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
-    def _font_candidates(self) -> list[str]:
-        families = list(GUI_FONT_FALLBACKS)
-        families.extend(QFontDatabase.families())
-        seen: set[str] = set()
-        ordered: list[str] = []
-        for family in families:
-            if family in seen:
-                continue
-            seen.add(family)
-            ordered.append(family)
-        return ordered
-
     def _reset_to_defaults(self) -> None:
-        self.font_family_combo.setCurrentText(DEFAULT_GUI_FONT_FAMILY)
         self.font_point_size_spin.setValue(DEFAULT_GUI_FONT_POINT_SIZE)
 
     def _accept(self) -> None:
-        family = self.font_family_combo.currentText().strip() or DEFAULT_GUI_FONT_FAMILY
         point_size = self.font_point_size_spin.value()
         self._preferences = GuiDisplayPreferences(
             theme=self._initial_preferences.theme,
             language=self._initial_preferences.language,
-            font_family=family,
             font_point_size=point_size,
         )
         self.preferences_applied.emit(self._preferences)
@@ -166,38 +130,3 @@ class SettingsDialog(QDialog):
 
     def selected_preferences(self) -> GuiDisplayPreferences:
         return self._preferences
-
-    def _close_popups(self) -> None:
-        close_combo_popups(self)
-
-    def hide(self) -> None:
-        self._close_popups()
-        self._suppress_popup_event_cleanup = True
-        super().hide()
-
-    def close(self) -> bool:
-        self._close_popups()
-        self._suppress_popup_event_cleanup = True
-        return super().close()
-
-    def changeEvent(self, event: QEvent) -> None:
-        if event.type() in {
-            QEvent.Type.ActivationChange,
-            QEvent.Type.WindowStateChange,
-        }:
-            self._close_popups()
-        super().changeEvent(event)
-
-    def hideEvent(self, event: QHideEvent) -> None:
-        if not self._suppress_popup_event_cleanup:
-            self._close_popups()
-        super().hideEvent(event)
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        if not self._suppress_popup_event_cleanup:
-            self._close_popups()
-        super().closeEvent(event)
-
-    def showEvent(self, event: QShowEvent) -> None:
-        self._suppress_popup_event_cleanup = False
-        super().showEvent(event)

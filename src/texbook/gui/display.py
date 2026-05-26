@@ -1,4 +1,4 @@
-"""GUI display preferences for theme and language."""
+"""GUI display preferences for theme, language, and size."""
 
 from __future__ import annotations
 
@@ -34,7 +34,6 @@ class GuiDisplayPreferences:
 
     theme: GuiThemeMode = GuiThemeMode.light
     language: GuiLanguage = GuiLanguage.zh_CN
-    font_family: str = DEFAULT_GUI_FONT_FAMILY
     font_point_size: int = DEFAULT_GUI_FONT_POINT_SIZE
 
     def __post_init__(self) -> None:
@@ -46,7 +45,6 @@ class GuiDisplayPreferences:
             language = GuiLanguage(language)
         object.__setattr__(self, "theme", theme)
         object.__setattr__(self, "language", language)
-        object.__setattr__(self, "font_family", coerce_font_family(self.font_family))
         object.__setattr__(
             self,
             "font_point_size",
@@ -70,20 +68,6 @@ def coerce_language(value: object, default: GuiLanguage = GuiLanguage.zh_CN) -> 
         return default
 
 
-def coerce_font_family(
-    value: object,
-    default: str = DEFAULT_GUI_FONT_FAMILY,
-) -> str:
-    """Return a non-empty GUI font family name."""
-    if value is None:
-        return default
-    try:
-        family = str(value).strip()
-    except (TypeError, ValueError):
-        return default
-    return family or default
-
-
 def coerce_font_point_size(
     value: object,
     default: int = DEFAULT_GUI_FONT_POINT_SIZE,
@@ -97,13 +81,12 @@ def coerce_font_point_size(
 
 
 def build_gui_font(
-    font_family: str,
     font_point_size: int,
     *,
     current_font: QFont | None = None,
 ) -> QFont:
     """Build a Qt font that applies the configured GUI display preferences."""
     font = QFont(current_font or QFont())
-    font.setFamilies([coerce_font_family(font_family), *GUI_FONT_FALLBACKS])
+    font.setFamilies([DEFAULT_GUI_FONT_FAMILY, *GUI_FONT_FALLBACKS])
     font.setPointSize(coerce_font_point_size(font_point_size))
     return font

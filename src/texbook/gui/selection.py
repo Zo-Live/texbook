@@ -78,7 +78,7 @@ class GuiPathSelectionState:
 
 
 def input_kind_from_label(label: str) -> GuiInputKind:
-    """Resolve a combo-box label to a stable input kind."""
+    """Resolve a localized label to a stable input kind."""
     for kind, kind_label in INPUT_KIND_LABELS.items():
         if label == kind_label:
             return kind

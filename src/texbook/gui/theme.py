@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from PySide6.QtGui import QColor, QPalette
-
-from texbook.gui.display import GuiThemeMode, coerce_font_point_size
+from texbook.gui.display import DEFAULT_GUI_FONT_FAMILY, GuiThemeMode, coerce_font_point_size
 
 
 _LIGHT_TOKENS = {
@@ -84,26 +80,9 @@ _DARK_TOKENS = {
 }
 
 
-@dataclass(frozen=True)
-class ComboPopupStyle:
-    """Direct style tokens for a combo-box popup window and its view."""
-
-    window_stylesheet: str
-    view_stylesheet: str
-    palette: QPalette
-    background: QColor
-    hover_background: QColor
-    selected_background: QColor
-    text: QColor
-    hover_text: QColor
-    selected_text: QColor
-    disabled_text: QColor
-
-
 def build_fluent_stylesheet(
     theme: GuiThemeMode | str = GuiThemeMode.light,
     *,
-    font_family: str = "Microsoft YaHei UI",
     font_point_size: int = 11,
 ) -> str:
     """Return the Fluent-style stylesheet used by the GUI shell."""
@@ -123,7 +102,7 @@ def build_fluent_stylesheet(
     QWidget#conversionMainPanel {{
         background: {token["window_bg"]};
         color: {token["text"]};
-        font-family: "{font_family}", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+        font-family: "{DEFAULT_GUI_FONT_FAMILY}", "Segoe UI", sans-serif;
         font-size: {base_point_size}pt;
     }}
 
@@ -285,7 +264,6 @@ def build_fluent_stylesheet(
 
     QLineEdit,
     QTextEdit,
-    QComboBox,
     QSpinBox,
     QDoubleSpinBox {{
         background: {token["row_bg"]};
@@ -303,43 +281,10 @@ def build_fluent_stylesheet(
 
     QLineEdit:focus,
     QTextEdit:focus,
-    QComboBox:focus,
     QSpinBox:focus,
     QDoubleSpinBox:focus {{
         background: {token["surface"]};
         border: 1px solid {token["accent"]};
-    }}
-
-    QComboBox::drop-down {{
-        border: none;
-        width: 28px;
-    }}
-
-    QComboBox QAbstractItemView {{
-        background: {token["surface"]};
-        color: {token["text"]};
-        border: 1px solid {token["border_strong"]};
-        border-radius: 6px;
-        outline: none;
-        padding: 4px;
-        selection-background-color: {token["accent"]};
-        selection-color: #ffffff;
-    }}
-
-    QComboBox QAbstractItemView::item {{
-        min-height: 26px;
-        padding: 6px 10px;
-        color: {token["text"]};
-    }}
-
-    QComboBox QAbstractItemView::item:hover {{
-        background: {token["hover"]};
-        color: {token["text_strong"]};
-    }}
-
-    QComboBox QAbstractItemView::item:selected {{
-        background: {token["accent"]};
-        color: #ffffff;
     }}
 
     QPushButton,
@@ -367,7 +312,6 @@ def build_fluent_stylesheet(
     QToolButton:disabled,
     QLineEdit:disabled,
     QTextEdit:disabled,
-    QComboBox:disabled,
     QSpinBox:disabled,
     QDoubleSpinBox:disabled {{
         background: {token["disabled_bg"]};
@@ -402,6 +346,10 @@ def build_fluent_stylesheet(
         color: {token["row_label"]};
     }}
 
+    QWidget[choiceGroup="true"]:disabled QCheckBox {{
+        color: {token["disabled_text"]};
+    }}
+
     QRadioButton::indicator,
     QCheckBox::indicator {{
         width: 16px;
@@ -429,95 +377,3 @@ def build_fluent_stylesheet(
         border: none;
     }}
     """
-
-
-def build_combo_popup_style(
-    theme: GuiThemeMode | str = GuiThemeMode.light,
-    *,
-    font_family: str = "Microsoft YaHei UI",
-    font_point_size: int = 11,
-) -> ComboPopupStyle:
-    """Return popup-specific styling that can be applied directly to combo popups."""
-    try:
-        theme_mode = GuiThemeMode(theme)
-    except ValueError:
-        theme_mode = GuiThemeMode.light
-    token = _DARK_TOKENS if theme_mode == GuiThemeMode.dark else _LIGHT_TOKENS
-    base_point_size = coerce_font_point_size(font_point_size)
-    font_family_stack = f'"{font_family}", "Microsoft YaHei UI", "Segoe UI", sans-serif'
-
-    background = QColor(token["surface"])
-    hover_background = QColor(token["hover"])
-    selected_background = QColor(token["accent"])
-    text = QColor(token["text"])
-    hover_text = QColor(token["text_strong"])
-    selected_text = QColor("#ffffff")
-    disabled_text = QColor(token["disabled_text"])
-
-    palette = QPalette()
-    for group in (
-        QPalette.ColorGroup.Active,
-        QPalette.ColorGroup.Inactive,
-        QPalette.ColorGroup.Disabled,
-    ):
-        palette.setColor(group, QPalette.ColorRole.Window, background)
-        palette.setColor(group, QPalette.ColorRole.WindowText, text)
-        palette.setColor(group, QPalette.ColorRole.Base, background)
-        palette.setColor(group, QPalette.ColorRole.AlternateBase, QColor(token["surface_soft"]))
-        palette.setColor(group, QPalette.ColorRole.Text, disabled_text if group == QPalette.ColorGroup.Disabled else text)
-        palette.setColor(group, QPalette.ColorRole.Button, background)
-        palette.setColor(group, QPalette.ColorRole.ButtonText, disabled_text if group == QPalette.ColorGroup.Disabled else text)
-        palette.setColor(group, QPalette.ColorRole.Highlight, selected_background)
-        palette.setColor(group, QPalette.ColorRole.HighlightedText, selected_text)
-        palette.setColor(group, QPalette.ColorRole.BrightText, selected_text)
-
-    return ComboPopupStyle(
-        window_stylesheet=f"""
-    QFrame {{
-        background: {token["surface"]};
-        border: 1px solid {token["border_strong"]};
-        border-radius: 6px;
-    }}
-        """,
-        view_stylesheet=f"""
-    QAbstractItemView,
-    QListView {{
-        background: {token["surface"]};
-        color: {token["text"]};
-        border: none;
-        outline: none;
-        padding: 4px;
-        selection-background-color: {token["accent"]};
-        selection-color: #ffffff;
-        font-family: {font_family_stack};
-        font-size: {base_point_size}pt;
-    }}
-
-    QAbstractItemView::item,
-    QListView::item {{
-        min-height: 26px;
-        padding: 6px 10px;
-        color: {token["text"]};
-    }}
-
-    QAbstractItemView::item:hover,
-    QListView::item:hover {{
-        background: {token["hover"]};
-        color: {token["text_strong"]};
-    }}
-
-    QAbstractItemView::item:selected,
-    QListView::item:selected {{
-        background: {token["accent"]};
-        color: #ffffff;
-    }}
-        """,
-        palette=palette,
-        background=background,
-        hover_background=hover_background,
-        selected_background=selected_background,
-        text=text,
-        hover_text=hover_text,
-        selected_text=selected_text,
-        disabled_text=disabled_text,
-    )

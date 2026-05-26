@@ -13,7 +13,6 @@ from texbook.gui.main_panel import ConversionMainPanel
 from texbook.gui.persistence import GuiPersistentState, GuiSettingsStore
 from texbook.gui.resources import APP_DISPLAY_NAME, resolve_app_icon_path
 from texbook.gui.theme import build_fluent_stylesheet
-from texbook.gui.widgets import close_combo_popups
 
 
 class MainWindow(QMainWindow):
@@ -25,7 +24,7 @@ class MainWindow(QMainWindow):
         self._initial_state = self._settings_store.load_state()
         self._display_preferences = self._initial_state.display_preferences
         self._open_dialogs: list[QDialog] = []
-        self._suppress_popup_event_cleanup = False
+        self._suppress_hide_event_cleanup = False
         self.setWindowTitle(self._tr("app.window_title"))
         self.setMinimumSize(QSize(960, 640))
         self.resize(QSize(1180, 760))
@@ -78,7 +77,6 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.setFont(
                 build_gui_font(
-                    preferences.font_family,
                     preferences.font_point_size,
                     current_font=app.font(),
                 )
@@ -86,13 +84,11 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(
                 build_fluent_stylesheet(
                     preferences.theme,
-                    font_family=preferences.font_family,
                     font_point_size=preferences.font_point_size,
                 )
             )
         self.setFont(
             build_gui_font(
-                preferences.font_family,
                 preferences.font_point_size,
                 current_font=self.font(),
             )
@@ -100,7 +96,6 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             build_fluent_stylesheet(
                 preferences.theme,
-                font_family=preferences.font_family,
                 font_point_size=preferences.font_point_size,
             )
         )
@@ -156,43 +151,34 @@ class MainWindow(QMainWindow):
             )
         )
 
-    def _close_app_popups(self) -> None:
-        close_combo_popups()
-
     def _close_transient_dialogs(self) -> None:
         for dialog in list(self._open_dialogs):
             dialog.close()
         self._open_dialogs.clear()
 
     def changeEvent(self, event: QEvent) -> None:
-        if event.type() == QEvent.Type.ActivationChange:
-            self._close_app_popups()
         if event.type() in {
             QEvent.Type.WindowStateChange,
         }:
-            self._close_app_popups()
             self._close_transient_dialogs()
         super().changeEvent(event)
 
     def hide(self) -> None:
-        self._close_app_popups()
         self._close_transient_dialogs()
-        self._suppress_popup_event_cleanup = True
+        self._suppress_hide_event_cleanup = True
         super().hide()
 
     def hideEvent(self, event: QHideEvent) -> None:
-        if not self._suppress_popup_event_cleanup:
-            self._close_app_popups()
+        if not self._suppress_hide_event_cleanup:
             self._close_transient_dialogs()
-        self._suppress_popup_event_cleanup = False
+        self._suppress_hide_event_cleanup = False
         super().hideEvent(event)
 
     def showEvent(self, event: QShowEvent) -> None:
-        self._suppress_popup_event_cleanup = False
+        self._suppress_hide_event_cleanup = False
         super().showEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._close_app_popups()
         self._close_transient_dialogs()
         self._save_gui_state()
         panel = self.centralWidget()
