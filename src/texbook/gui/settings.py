@@ -8,7 +8,7 @@ from enum import Enum
 
 from texbook.gui.display import GuiLanguage
 from texbook.gui.i18n import tr
-from texbook.gui.selection import GuiPathSelectionState
+from texbook.gui.selection import GuiInputKind, GuiPathSelectionState
 
 
 class GuiOutputKind(str, Enum):
@@ -98,7 +98,10 @@ def validate_gui_settings(
 
     if settings.output_kind not in {item.value for item in GuiOutputKind}:
         errors.append(tr(language, "error.invalid_output_kind"))
-    if not settings.batch_pattern.strip():
+    if (
+        settings.path_state.input_selection.kind == GuiInputKind.directory
+        and not settings.batch_pattern.strip()
+    ):
         errors.append(tr(language, "error.empty_batch_pattern"))
     if settings.document_class not in {
         "auto",
@@ -123,7 +126,9 @@ def validate_gui_settings(
         errors.append(tr(language, "error.invalid_api_key_source"))
     if api_key_source_value == GuiApiKeySource.environment.value:
         env_name = settings.api_key.strip()
-        if env_name and env_name not in os.environ:
+        if not env_name:
+            errors.append(tr(language, "error.empty_api_key_env"))
+        elif env_name not in os.environ:
             errors.append(tr(language, "error.missing_api_key_env", env_name=env_name))
     if settings.image_format not in {"auto", "png", "jpeg"}:
         errors.append(tr(language, "error.invalid_image_format"))

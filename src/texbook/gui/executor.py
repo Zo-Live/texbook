@@ -185,8 +185,8 @@ def write_project_result(
     target_dir = target_dir.expanduser()
     if target_dir.exists() and not target_dir.is_dir():
         raise GuiTaskExecutionError(f"项目输出路径已存在但不是目录：{target_dir}")
+    _ensure_safe_project_cleanup_target(target_dir)
     if target_dir.exists() and any(target_dir.iterdir()):
-        _ensure_safe_project_cleanup_target(target_dir)
         _confirm_overwrite(
             target=target_dir,
             output_kind=GuiOutputKind.project,

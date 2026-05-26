@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 from texbook.convert import LatexProjectResult  # noqa: E402
 from texbook.document_class import DocumentClassMode  # noqa: E402
 from texbook.gui.app import create_application  # noqa: E402
-from texbook.gui.core_adapter import build_core_conversion_bundle  # noqa: E402
+from texbook.gui.core_adapter import GuiCoreAdapterError, build_core_conversion_bundle  # noqa: E402
 from texbook.gui.display import GuiDisplayPreferences, GuiLanguage, GuiThemeMode  # noqa: E402
 from texbook.gui.executor import (  # noqa: E402
     GuiCancellationToken,
@@ -234,6 +234,14 @@ def test_pyinstaller_spec_references_gui_entry_and_icon():
     assert "datas=[(str(ICON_PATH), \"docs\")]" in spec_text
     assert "icon=str(ICON_PATH)" in spec_text
     assert "console=False" in spec_text
+
+
+def test_pyinstaller_spec_does_not_bundle_latex_build_configuration():
+    spec_text = (ROOT / "packaging" / "texbook-gui.spec").read_text(encoding="utf-8")
+
+    assert ".latexmkrc" not in spec_text
+    assert "post-build.sh" not in spec_text
+    assert "latexmk" not in spec_text
 
 
 def test_main_window_shows_conversion_tool_panel_immediately():
@@ -477,6 +485,22 @@ def test_conversion_panel_supports_environment_api_key_source(monkeypatch):
     app.quit()
 
 
+def test_conversion_panel_requires_environment_api_key_name_when_using_environment_source():
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+    panel.findChild(QComboBox, "apiKeySourceCombo").setCurrentText("环境变量名")
+    panel.findChild(QLineEdit, "apiKeyField").setText("")
+
+    settings = panel.current_settings()
+
+    assert "API Key 环境变量名不能为空。" in panel.validate_settings()
+    with pytest.raises(GuiCoreAdapterError, match="API Key 环境变量名不能为空。"):
+        build_core_conversion_bundle(settings, repo_root=ROOT)
+
+    panel.close()
+    app.quit()
+
+
 def test_conversion_panel_validates_pages_and_title_conflict():
     app = create_application(["texbook-gui-test"])
     window = MainWindow()
@@ -543,6 +567,24 @@ def test_conversion_panel_option_dependencies_follow_mode_cache_and_image_format
     app.quit()
 
 
+def test_conversion_panel_batch_pattern_only_validates_for_directory_input():
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+
+    panel.findChild(QLineEdit, "batchPatternField").setText("")
+
+    assert "目录批量匹配模式不能为空。" not in panel.validate_settings()
+    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("目录批量")
+
+    assert "目录批量匹配模式不能为空。" in panel.validate_settings()
+    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("多个 PDF")
+
+    assert "目录批量匹配模式不能为空。" not in panel.validate_settings()
+
+    panel.close()
+    app.quit()
+
+
 def test_conversion_panel_theme_and_language_switch_keep_stable_values():
     app = create_application(["texbook-gui-test"])
     window = MainWindow()
@@ -572,7 +614,7 @@ def test_conversion_panel_theme_and_language_switch_keep_stable_values():
     assert panel.current_settings().output_kind == GuiOutputKind.project
     assert panel.findChild(QComboBox, "apiKeySourceCombo").currentText() == "Environment variable"
     assert panel.current_settings().api_key_source == GuiApiKeySource.environment
-    assert window.statusBar().currentMessage() == "Select PDF input and output target"
+    assert window.statusBar().currentMessage() == "API Key environment variable name cannot be empty."
 
     window.close()
     app.quit()
@@ -1363,6 +1405,25 @@ def test_gui_project_write_rejects_package_subdirectory(tmp_path):
         raise AssertionError("expected package subdirectory target to fail")
     finally:
         (dangerous / "old.txt").unlink(missing_ok=True)
+        dangerous.rmdir()
+
+
+def test_gui_project_write_rejects_empty_package_subdirectory(tmp_path):
+    project = LatexProjectResult(
+        files={PurePosixPath("main.tex"): "% main\n"},
+        entrypoint=PurePosixPath("main.tex"),
+    )
+    dangerous = ROOT / "src" / "texbook" / "__stage4_probe_empty"
+    dangerous.mkdir()
+
+    try:
+        with pytest.raises(GuiTaskExecutionError, match="危险项目目录"):
+            write_project_result(
+                project,
+                dangerous,
+                policy=GuiWritePolicy(confirm_overwrite=False),
+            )
+    finally:
         dangerous.rmdir()
 
 

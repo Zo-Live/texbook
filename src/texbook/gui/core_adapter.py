@@ -119,7 +119,7 @@ def _api_key_for_core(settings: GuiConversionSettings) -> str | None:
     if settings.api_key_source != GuiApiKeySource.environment:
         return text or None
     if not text:
-        return None
+        raise GuiCoreAdapterError("API Key 环境变量名不能为空。")
     resolved = os.environ.get(text)
     if not resolved:
         raise GuiCoreAdapterError(f"API Key 环境变量不存在：{text}。")
