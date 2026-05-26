@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -18,6 +19,13 @@ class GuiOutputKind(str, Enum):
 
 # Backward-compatible alias for tests and callers from the earlier GUI stage.
 GuiConversionMode = GuiOutputKind
+
+
+class GuiApiKeySource(str, Enum):
+    """API Key sources supported by the GUI model panel."""
+
+    direct = "direct"
+    environment = "environment"
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,7 @@ class GuiConversionSettings:
     model: str = ""
     base_url: str = ""
     api_key: str = ""
+    api_key_source: GuiApiKeySource = GuiApiKeySource.direct
     prompt_preset: str = "chinese-math"
     extra_prompt: str = ""
     temperature: float = 1.0
@@ -69,8 +78,12 @@ class GuiConversionSettings:
         output_kind = self.conversion_mode or self.output_kind
         if isinstance(output_kind, str):
             output_kind = GuiOutputKind(output_kind)
+        api_key_source = self.api_key_source
+        if isinstance(api_key_source, str):
+            api_key_source = GuiApiKeySource(api_key_source)
         object.__setattr__(self, "output_kind", output_kind)
         object.__setattr__(self, "conversion_mode", output_kind)
+        object.__setattr__(self, "api_key_source", api_key_source)
 
 
 def validate_gui_settings(settings: GuiConversionSettings) -> list[str]:
@@ -95,6 +108,17 @@ def validate_gui_settings(settings: GuiConversionSettings) -> list[str]:
         errors.append("结构规划模式无效。")
     if settings.title_source not in {"filename", "llm"}:
         errors.append("标题来源无效。")
+    api_key_source_value = (
+        settings.api_key_source.value
+        if isinstance(settings.api_key_source, GuiApiKeySource)
+        else str(settings.api_key_source)
+    )
+    if api_key_source_value not in {item.value for item in GuiApiKeySource}:
+        errors.append("API Key 来源无效。")
+    if api_key_source_value == GuiApiKeySource.environment.value:
+        env_name = settings.api_key.strip()
+        if env_name and env_name not in os.environ:
+            errors.append(f"API Key 环境变量不存在：{env_name}。")
     if settings.image_format not in {"auto", "png", "jpeg"}:
         errors.append("图像格式无效。")
     if settings.beamer_box_style not in {"block", "tcolorbox"}:

@@ -390,6 +390,7 @@ def _settings_for_pdf(
         model=settings.model,
         base_url=settings.base_url,
         api_key=settings.api_key,
+        api_key_source=settings.api_key_source,
         prompt_preset=settings.prompt_preset,
         extra_prompt=settings.extra_prompt,
         temperature=settings.temperature,

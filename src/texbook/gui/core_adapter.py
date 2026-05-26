@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from texbook.document_class import DocumentClassMode
 from texbook.extract.base import ImageRenderOptions
-from texbook.gui.settings import GuiConversionSettings, parse_gui_pages
+from texbook.gui.settings import GuiApiKeySource, GuiConversionSettings, parse_gui_pages
 from texbook.llm.cache import ChunkCacheOptions
 from texbook.llm.config import LLMConfig, LLMConfigError
 from texbook.llm.factory import PdfConversionOptions
@@ -40,7 +41,7 @@ def build_core_conversion_bundle(
     try:
         llm_config = LLMConfig.from_values(
             model=settings.model.strip() or None,
-            api_key=settings.api_key.strip() or None,
+            api_key=_api_key_for_core(settings),
             base_url=settings.base_url.strip() or None,
             temperature=settings.temperature,
             timeout=settings.timeout_seconds,
@@ -111,3 +112,15 @@ def _manual_title_for_core(settings: GuiConversionSettings) -> str | None:
     if not title:
         return None
     return title
+
+
+def _api_key_for_core(settings: GuiConversionSettings) -> str | None:
+    text = settings.api_key.strip()
+    if settings.api_key_source != GuiApiKeySource.environment:
+        return text or None
+    if not text:
+        return None
+    resolved = os.environ.get(text)
+    if not resolved:
+        raise GuiCoreAdapterError(f"API Key 环境变量不存在：{text}。")
+    return resolved

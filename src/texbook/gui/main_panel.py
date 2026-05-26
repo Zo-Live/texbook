@@ -28,6 +28,11 @@ from PySide6.QtWidgets import (
 )
 
 from texbook.gui.executor import GuiOverwriteConfirmationRequest, GuiTaskExecutor
+from texbook.gui.persistence import (
+    GuiPathMemory,
+    join_dialog_path,
+    system_default_dialog_directory,
+)
 from texbook.gui.resources import APP_DISPLAY_NAME
 from texbook.gui.selection import (
     GuiInputKind,
@@ -36,6 +41,7 @@ from texbook.gui.selection import (
     input_kind_from_label,
 )
 from texbook.gui.settings import (
+    GuiApiKeySource,
     GuiConversionMode,
     GuiOutputKind,
     GuiConversionSettings,
@@ -68,6 +74,7 @@ class ConversionMainPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("conversionMainPanel")
         self.selection_state = GuiPathSelectionState()
+        self.path_memory = GuiPathMemory()
         self.tasks = []
         self._task_states: dict[str, GuiTaskViewState] = {}
         self._task_rows: dict[str, QFrame] = {}
@@ -317,8 +324,13 @@ class ConversionMainPanel(QWidget):
         api_key = QLineEdit(panel)
         api_key.setObjectName("apiKeyField")
         api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        api_key.setPlaceholderText("TEXBOOK_API_KEY")
         self.api_key_field = api_key
+
+        api_key_source = QComboBox(panel)
+        api_key_source.setObjectName("apiKeySourceCombo")
+        api_key_source.addItems(["直接输入", "环境变量名"])
+        self.api_key_source_combo = api_key_source
+        grid.add_row("Key 来源", api_key_source)
         grid.add_row("API Key", api_key)
 
         preset = QComboBox(panel)
@@ -628,6 +640,7 @@ class ConversionMainPanel(QWidget):
         self.model_field.textChanged.connect(self._sync_gui_state)
         self.base_url_field.textChanged.connect(self._sync_gui_state)
         self.api_key_field.textChanged.connect(self._sync_gui_state)
+        self.api_key_source_combo.currentTextChanged.connect(self._sync_api_key_controls)
         self.prompt_preset_combo.currentTextChanged.connect(self._sync_gui_state)
         self.extra_prompt_edit.textChanged.connect(self._sync_gui_state)
         self.confirm_overwrite_checkbox.toggled.connect(self._sync_gui_state)
@@ -656,6 +669,7 @@ class ConversionMainPanel(QWidget):
 
         self._sync_image_controls()
         self._sync_cache_controls()
+        self._sync_api_key_controls()
         self._sync_gui_state()
 
     def _browse_pdf_input(self) -> None:
@@ -664,7 +678,7 @@ class ConversionMainPanel(QWidget):
             path, _selected_filter = QFileDialog.getOpenFileName(
                 self,
                 "选择 PDF 文件",
-                "",
+                self._input_dialog_directory(),
                 "PDF 文件 (*.pdf)",
             )
             if path:
@@ -675,14 +689,18 @@ class ConversionMainPanel(QWidget):
             paths, _selected_filter = QFileDialog.getOpenFileNames(
                 self,
                 "选择多个 PDF 文件",
-                "",
+                self._input_dialog_directory(),
                 "PDF 文件 (*.pdf)",
             )
             if paths:
                 self.set_input_selection(GuiInputSelection.from_multiple_files(paths))
             return
 
-        directory = QFileDialog.getExistingDirectory(self, "选择 PDF 目录", "")
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "选择 PDF 目录",
+            self._input_dialog_directory(),
+        )
         if directory:
             self.set_input_selection(GuiInputSelection.from_directory(directory))
 
@@ -691,20 +709,29 @@ class ConversionMainPanel(QWidget):
             path, _selected_filter = QFileDialog.getSaveFileName(
                 self,
                 "选择输出 .tex 文件",
-                "",
+                self._output_tex_dialog_path(),
                 "LaTeX 文件 (*.tex)",
             )
             if path:
                 self.set_output_directory(path)
             return
 
-        directory = QFileDialog.getExistingDirectory(self, "选择输出目录", "")
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "选择输出目录",
+            self._output_dialog_directory(),
+        )
         if directory:
             self.set_output_directory(directory)
 
     def _browse_cache_directory(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "选择缓存目录", "")
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "选择缓存目录",
+            self._cache_dialog_directory(),
+        )
         if directory:
+            self.path_memory = self.path_memory.remember_cache_directory(directory)
             self.cache_directory_field.setText(directory)
 
     def _change_input_kind(self, _text: str) -> None:
@@ -712,6 +739,7 @@ class ConversionMainPanel(QWidget):
 
     def set_input_selection(self, selection: GuiInputSelection) -> None:
         """Set the current PDF input selection and refresh dependent controls."""
+        self.path_memory = self.path_memory.remember_input_selection(selection)
         self.selection_state = GuiPathSelectionState(
             input_selection=selection,
             output_directory=self.selection_state.output_directory,
@@ -720,11 +748,23 @@ class ConversionMainPanel(QWidget):
 
     def set_output_directory(self, directory: str) -> None:
         """Set the current output directory and refresh dependent controls."""
+        self.path_memory = self.path_memory.remember_output_path(
+            directory,
+            is_file=self._output_target_is_single_tex_file(),
+        )
         self.selection_state = GuiPathSelectionState(
             input_selection=self.selection_state.input_selection,
             output_directory=directory,
         )
         self._refresh_path_state()
+
+    def set_path_memory(self, path_memory: GuiPathMemory) -> None:
+        """Replace dialog path memory restored from persistent settings."""
+        self.path_memory = path_memory
+
+    def current_path_memory(self) -> GuiPathMemory:
+        """Return current dialog path memory."""
+        return self.path_memory
 
     def _refresh_path_state(self) -> None:
         self.pdf_input_field.setText(self.selection_state.input_selection.display_text())
@@ -753,6 +793,41 @@ class ConversionMainPanel(QWidget):
         if callable(status_bar):
             status_bar().showMessage(message)
 
+    def _input_dialog_directory(self) -> str:
+        return self.path_memory.last_input_directory or system_default_dialog_directory()
+
+    def _output_dialog_directory(self) -> str:
+        return self.path_memory.last_output_directory or system_default_dialog_directory()
+
+    def _cache_dialog_directory(self) -> str:
+        cache_directory = self.cache_directory_field.text().strip()
+        default_cache_directory = GuiConversionSettings().cache_directory
+        if cache_directory and cache_directory != default_cache_directory:
+            return cache_directory
+        return (
+            self.path_memory.last_cache_directory
+            or system_default_dialog_directory()
+        )
+
+    def _output_tex_dialog_path(self) -> str:
+        directory = self._output_dialog_directory()
+        input_paths = self.selection_state.input_selection.paths
+        filename = "output.tex"
+        if input_paths:
+            stem = self._path_stem(input_paths[0])
+            if stem:
+                filename = f"{stem}.tex"
+        return join_dialog_path(directory, filename)
+
+    def _output_target_is_single_tex_file(self) -> bool:
+        return (
+            self._current_input_kind() == GuiInputKind.single_file
+            and self._current_output_kind() == GuiOutputKind.tex_file
+        )
+
+    def _path_stem(self, path: str) -> str:
+        return path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
     def _current_input_kind(self) -> GuiInputKind:
         return input_kind_from_label(self.input_type_combo.currentText())
 
@@ -763,6 +838,11 @@ class ConversionMainPanel(QWidget):
         if self.output_kind_combo.currentText() == "目录化项目":
             return GuiOutputKind.project
         return GuiOutputKind.tex_file
+
+    def _current_api_key_source(self) -> GuiApiKeySource:
+        if self.api_key_source_combo.currentText() == "环境变量名":
+            return GuiApiKeySource.environment
+        return GuiApiKeySource.direct
 
     def _set_conversion_mode(self, mode: GuiConversionMode) -> None:
         self.output_kind_combo.setCurrentText("目录化项目" if mode == GuiOutputKind.project else "单个 .tex")
@@ -790,6 +870,14 @@ class ConversionMainPanel(QWidget):
     def _sync_image_controls(self) -> None:
         is_jpeg = self.image_format_combo.currentText() == "jpeg"
         self.jpeg_quality_spin_box.setEnabled(is_jpeg or self.image_format_combo.currentText() == "auto")
+        self._sync_gui_state()
+
+    def _sync_api_key_controls(self) -> None:
+        if self._current_api_key_source() == GuiApiKeySource.environment:
+            self.api_key_field.setPlaceholderText("环境变量名，如 TEXBOOK_API_KEY")
+        else:
+            self.api_key_field.setPlaceholderText("直接输入 API Key")
+        self.api_key_field.setEchoMode(QLineEdit.EchoMode.Password)
         self._sync_gui_state()
 
     def _sync_gui_state(self) -> None:
@@ -836,6 +924,7 @@ class ConversionMainPanel(QWidget):
             model=self.model_field.text(),
             base_url=self.base_url_field.text(),
             api_key=self.api_key_field.text(),
+            api_key_source=self._current_api_key_source(),
             prompt_preset=self.prompt_preset_combo.currentText(),
             extra_prompt=self.extra_prompt_edit.toPlainText(),
             temperature=self.temperature_spin_box.value(),
@@ -878,6 +967,11 @@ class ConversionMainPanel(QWidget):
         self.model_field.setText(settings.model)
         self.base_url_field.setText(settings.base_url)
         self.api_key_field.setText(settings.api_key)
+        self.api_key_source_combo.setCurrentText(
+            "环境变量名"
+            if settings.api_key_source == GuiApiKeySource.environment
+            else "直接输入"
+        )
         self.prompt_preset_combo.setCurrentText(settings.prompt_preset)
         self.extra_prompt_edit.setPlainText(settings.extra_prompt)
         self.temperature_spin_box.setValue(settings.temperature)
@@ -901,6 +995,7 @@ class ConversionMainPanel(QWidget):
         self.llm_retry_max_delay_spin_box.setValue(settings.llm_retry_max_delay)
         self.beamer_box_style_combo.setCurrentText(settings.beamer_box_style)
         self.ctex_font_profile_combo.setCurrentText(settings.ctex_font_profile)
+        self._sync_api_key_controls()
         self._sync_cache_controls()
         self._sync_image_controls()
         self._refresh_path_state()

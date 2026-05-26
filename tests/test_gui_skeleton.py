@@ -7,8 +7,11 @@ from pathlib import Path
 from pathlib import PurePosixPath
 import runpy
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QSettings  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QCheckBox,
@@ -41,6 +44,11 @@ from texbook.gui.executor import (  # noqa: E402
 )
 from texbook.gui.main_panel import ConversionMainPanel  # noqa: E402
 from texbook.gui.main_window import MainWindow  # noqa: E402
+from texbook.gui.persistence import (  # noqa: E402
+    GuiPathMemory,
+    GuiPersistentState,
+    GuiSettingsStore,
+)
 from texbook.gui.resources import (  # noqa: E402
     APP_DISPLAY_NAME,
     APP_ORGANIZATION_NAME,
@@ -48,7 +56,13 @@ from texbook.gui.resources import (  # noqa: E402
     resolve_app_icon_path,
 )
 from texbook.gui.selection import GuiInputKind, GuiInputSelection, GuiPathSelectionState  # noqa: E402
-from texbook.gui.settings import GuiConversionMode, GuiConversionSettings, GuiOutputKind  # noqa: E402
+from texbook.gui.settings import (  # noqa: E402
+    GuiApiKeySource,
+    GuiConversionMode,
+    GuiConversionSettings,
+    GuiOutputKind,
+    validate_gui_settings,
+)
 from texbook.gui.tasks import (  # noqa: E402
     GuiTaskRuntimeUpdate,
     GuiTaskStage,
@@ -67,6 +81,34 @@ from texbook.structure import StructureMode  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _clear_default_gui_settings():
+    settings = QSettings(APP_ORGANIZATION_NAME, APP_DISPLAY_NAME)
+    settings.clear()
+    settings.sync()
+    yield
+    settings.clear()
+    settings.sync()
+
+
+def _gui_settings_store(
+    tmp_path: Path,
+    *,
+    default_directory: str = r"C:\Users\tester\Documents",
+) -> GuiSettingsStore:
+    ini_format = (
+        QSettings.Format.IniFormat
+        if hasattr(QSettings, "Format")
+        else QSettings.IniFormat
+    )
+    settings = QSettings(str(tmp_path / "texbook-gui.ini"), ini_format)
+    settings.clear()
+    return GuiSettingsStore(
+        settings=settings,
+        default_directory_provider=lambda: default_directory,
+    )
 
 
 class _FakeConverter:
@@ -236,6 +278,7 @@ def test_conversion_panel_exposes_future_task_control_points():
         "modelField",
         "baseUrlField",
         "apiKeyField",
+        "apiKeySourceCombo",
         "promptPresetCombo",
         "extraPromptEdit",
         "cacheEnabledCheckBox",
@@ -384,6 +427,7 @@ def test_conversion_panel_settings_round_trip_preserves_all_fields():
     assert settings.model == "vision-model"
     assert settings.base_url == "https://api.example/v1"
     assert settings.api_key == "secret"
+    assert settings.api_key_source == GuiApiKeySource.direct
     assert settings.extra_prompt == "只提取公式"
     assert settings.temperature == 0.7
     assert settings.timeout_seconds == 120.0
@@ -405,6 +449,28 @@ def test_conversion_panel_settings_round_trip_preserves_all_fields():
     assert settings.llm_retry_max_delay == 45.0
     assert settings.beamer_box_style == "tcolorbox"
     assert settings.ctex_font_profile == "local"
+
+    panel.close()
+    app.quit()
+
+
+def test_conversion_panel_supports_environment_api_key_source(monkeypatch):
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+
+    panel.findChild(QComboBox, "apiKeySourceCombo").setCurrentText("环境变量名")
+    panel.findChild(QLineEdit, "apiKeyField").setText("TEXBOOK_GUI_TEST_KEY")
+
+    settings = panel.current_settings()
+
+    assert settings.api_key_source == GuiApiKeySource.environment
+    assert settings.api_key == "TEXBOOK_GUI_TEST_KEY"
+    assert panel.findChild(QLineEdit, "apiKeyField").echoMode() == QLineEdit.EchoMode.Password
+    assert "API Key 环境变量不存在：TEXBOOK_GUI_TEST_KEY。" in validate_gui_settings(settings)
+
+    monkeypatch.setenv("TEXBOOK_GUI_TEST_KEY", "secret")
+
+    assert validate_gui_settings(settings) == []
 
     panel.close()
     app.quit()
@@ -494,6 +560,91 @@ def test_conversion_panel_cache_directory_browse_updates_settings(monkeypatch):
     app.quit()
 
 
+def test_gui_settings_store_round_trips_persistent_settings(tmp_path):
+    store = _gui_settings_store(tmp_path)
+    state = GuiPersistentState(
+        settings=GuiConversionSettings(
+            output_kind=GuiOutputKind.project,
+            confirm_overwrite=False,
+            batch_pattern="slides-*.pdf",
+            pages="1,3-5",
+            document_class="ctexbeamer",
+            structure_mode="llm",
+            structure_chunk_pages=6,
+            structure_max_pages=48,
+            manual_title="手动标题",
+            title_source="filename",
+            show_date=True,
+            beamer_title_page=False,
+            model="vision-model",
+            base_url="https://api.example/v1",
+            api_key="TEXBOOK_GUI_KEY",
+            api_key_source=GuiApiKeySource.environment,
+            prompt_preset="chinese-math",
+            extra_prompt="只提取公式",
+            temperature=0.7,
+            timeout_seconds=120.0,
+            max_tokens=64000,
+            cache_enabled=True,
+            cache_directory=r"D:\tex-cache",
+            clear_cache=True,
+            chunk_pages=3,
+            prefetch_chunks=2,
+            llm_max_concurrency=2,
+            llm_min_request_interval=1.5,
+            batch_workers=4,
+            image_dpi=180,
+            image_dpi_min=120,
+            image_dpi_max=240,
+            image_format="jpeg",
+            jpeg_quality=92,
+            llm_retries=4,
+            llm_retry_initial_delay=3.5,
+            llm_retry_max_delay=45.0,
+            beamer_box_style="tcolorbox",
+            ctex_font_profile="local",
+        ),
+        path_memory=GuiPathMemory(
+            last_input_directory=r"C:\books",
+            last_output_directory=r"D:\tex-output",
+            last_cache_directory=r"D:\tex-cache",
+        ),
+    )
+
+    store.save_state(state)
+    loaded = store.load_state()
+
+    assert loaded.settings.output_kind == GuiOutputKind.project
+    assert loaded.settings.confirm_overwrite is False
+    assert loaded.settings.batch_pattern == "slides-*.pdf"
+    assert loaded.settings.pages == "1,3-5"
+    assert loaded.settings.document_class == "ctexbeamer"
+    assert loaded.settings.structure_mode == "llm"
+    assert loaded.settings.api_key == "TEXBOOK_GUI_KEY"
+    assert loaded.settings.api_key_source == GuiApiKeySource.environment
+    assert loaded.settings.timeout_seconds == 120.0
+    assert loaded.settings.image_dpi_max == 240
+    assert loaded.settings.clear_cache is False
+    assert loaded.settings.path_state == GuiPathSelectionState()
+    assert loaded.path_memory.last_input_directory == r"C:\books"
+    assert loaded.path_memory.last_output_directory == r"D:\tex-output"
+    assert loaded.path_memory.last_cache_directory == r"D:\tex-cache"
+
+
+def test_gui_settings_store_falls_back_from_invalid_values(tmp_path):
+    store = _gui_settings_store(tmp_path)
+    raw = store._settings
+    raw.setValue("conversion/output_kind", "invalid")
+    raw.setValue("model/api_key_source", "invalid")
+    raw.setValue("runtime/batch_workers", "bad")
+
+    loaded = store.load_conversion_settings()
+
+    assert loaded.output_kind == GuiOutputKind.tex_file
+    assert loaded.api_key_source == GuiApiKeySource.direct
+    assert loaded.batch_workers == 1
+
+
 def test_gui_input_selection_accepts_windows_paths_and_filters_non_pdf():
     selection = GuiInputSelection.from_multiple_files(
         [
@@ -535,6 +686,60 @@ def test_conversion_panel_single_pdf_and_output_directory_enable_add_task(monkey
     assert panel.findChild(QLineEdit, "outputDirectoryField").text() == r"D:\tex-output\lecture.tex"
     assert panel.findChild(QPushButton, "addTaskButton").isEnabled()
     assert not panel.findChild(QPushButton, "startButton").isEnabled()
+
+    panel.close()
+    app.quit()
+
+
+def test_conversion_panel_uses_default_directory_for_first_input_dialog(monkeypatch):
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+    captured = []
+
+    monkeypatch.setattr(
+        "texbook.gui.main_panel.system_default_dialog_directory",
+        lambda: r"C:\Users\tester\Documents",
+    )
+    monkeypatch.setattr(
+        "texbook.gui.main_panel.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: captured.append(args[2]) or ("", ""),
+    )
+
+    panel.findChild(QToolButton, "pdfInputBrowseButton").click()
+
+    assert captured == [r"C:\Users\tester\Documents"]
+
+    panel.close()
+    app.quit()
+
+
+def test_conversion_panel_remembers_input_and_output_dialog_directories(monkeypatch):
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+    input_dirs = []
+    output_dirs = []
+
+    panel.set_input_selection(GuiInputSelection.from_single_file(r"C:\books\lecture.pdf"))
+    panel.set_path_memory(
+        panel.current_path_memory().remember_output_path(
+            r"D:\tex-output",
+            is_file=False,
+        )
+    )
+    monkeypatch.setattr(
+        "texbook.gui.main_panel.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: input_dirs.append(args[2]) or ("", ""),
+    )
+    monkeypatch.setattr(
+        "texbook.gui.main_panel.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: output_dirs.append(args[2]) or ("", ""),
+    )
+
+    panel.findChild(QToolButton, "pdfInputBrowseButton").click()
+    panel.findChild(QToolButton, "outputBrowseButton").click()
+
+    assert input_dirs == [r"C:\books"]
+    assert output_dirs == [r"D:\tex-output\lecture.tex"]
 
     panel.close()
     app.quit()
@@ -631,6 +836,49 @@ def test_main_window_status_bar_tracks_path_selection_state():
     app.quit()
 
 
+def test_main_window_restores_and_saves_persistent_gui_state(tmp_path):
+    store = _gui_settings_store(tmp_path)
+    store.save_state(
+        GuiPersistentState(
+            settings=GuiConversionSettings(
+                output_kind=GuiOutputKind.project,
+                model="stored-model",
+                api_key="stored-key",
+                api_key_source=GuiApiKeySource.direct,
+                pages="1-2",
+                clear_cache=True,
+            ),
+            path_memory=GuiPathMemory(
+                last_input_directory=r"C:\stored-input",
+                last_output_directory=r"D:\stored-output",
+            ),
+        )
+    )
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow(settings_store=store)
+    panel = window.centralWidget()
+
+    assert panel.current_settings().output_kind == GuiOutputKind.project
+    assert panel.current_settings().model == "stored-model"
+    assert panel.current_settings().api_key == "stored-key"
+    assert panel.current_settings().clear_cache is False
+    assert panel.current_path_memory().last_input_directory == r"C:\stored-input"
+    assert panel.task_view_states() == ()
+
+    panel.set_input_selection(GuiInputSelection.from_single_file(r"C:\books\lecture.pdf"))
+    panel.findChild(QComboBox, "outputKindCombo").setCurrentText("单个 .tex")
+    panel.set_output_directory(r"D:\tex-output\lecture.tex")
+    window.close()
+
+    loaded = store.load_state()
+
+    assert loaded.settings.path_state == GuiPathSelectionState()
+    assert loaded.path_memory.last_input_directory == r"C:\books"
+    assert loaded.path_memory.last_output_directory == r"D:\tex-output"
+
+    app.quit()
+
+
 def test_gui_core_adapter_maps_settings_to_core_options(tmp_path, monkeypatch):
     monkeypatch.setenv("TEXBOOK_MODEL", "env-model")
     monkeypatch.setenv("TEXBOOK_API_KEY", "env-key")
@@ -684,6 +932,21 @@ def test_gui_core_adapter_maps_settings_to_core_options(tmp_path, monkeypatch):
     assert bundle.conversion_options.output_options.beamer_title_page is False
     assert bundle.conversion_options.retry_options.retries == 4
     assert bundle.conversion_options.llm_max_concurrency == 2
+
+
+def test_gui_core_adapter_resolves_api_key_from_named_environment_variable(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "env-model")
+    monkeypatch.setenv("TEXBOOK_GUI_API_KEY", "resolved-key")
+
+    bundle = build_core_conversion_bundle(
+        GuiConversionSettings(
+            api_key="TEXBOOK_GUI_API_KEY",
+            api_key_source=GuiApiKeySource.environment,
+        ),
+        repo_root=ROOT,
+    )
+
+    assert bundle.llm_config.api_key == "resolved-key"
 
 
 def test_create_tasks_for_single_file_tex_and_project(monkeypatch):
