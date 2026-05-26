@@ -1,1 +1,0 @@
-do "../.latexmkrc" or die $@ || $!;

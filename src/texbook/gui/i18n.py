@@ -14,15 +14,15 @@ _STRINGS: dict[GuiLanguage, dict[str, str]] = {
         "menu.about": "关于 {app_name}",
         "dialog.about.title": "关于 {app_name}",
         "dialog.about.text": (
-            "{app_name} 是面向中文数学讲义的 PDF 转 LaTeX 转换工具。"
+            "{app_name} 是基于 WSLg 的 PDF 转 LaTeX 桌面应用，面向数学讲义、教材和幻灯片。"
         ),
         "dialog.about.informative": (
             "基本流程：\n"
             "1. 选择单个 PDF、多个 PDF 或 PDF 目录。\n"
-            "2. 选择输出 .tex 文件或目录化项目的目标位置。\n"
+            "2. 选择单个 .tex 文件或目录化项目的输出目标。\n"
             "3. 配置支持图片输入的 OpenAI-compatible 模型、Base URL 和 API Key。\n"
             "4. 点击“添加任务”加入队列，再点击“开始转换”执行。\n\n"
-            "GUI 只负责转换任务和结果写盘，不负责 LaTeX 编译；如需生成 PDF，请在本地 TeX 环境中自行编译输出的 .tex。"
+            "任务队列会展示阶段、进度、缓存命中、重试、失败原因和完成结果；界面支持亮色/暗色模式、中文/English 切换、字号设置和路径记忆。"
         ),
         "status.ready": "就绪",
         "command.subtitle": "PDF 转 LaTeX 转换工具",
@@ -236,15 +236,15 @@ _STRINGS: dict[GuiLanguage, dict[str, str]] = {
         "menu.about": "About {app_name}",
         "dialog.about.title": "About {app_name}",
         "dialog.about.text": (
-            "{app_name} is a PDF to LaTeX conversion tool for Chinese math lecture notes."
+            "{app_name} is a WSLg desktop app for converting math lecture notes, textbooks, and slides from PDF to LaTeX."
         ),
         "dialog.about.informative": (
             "Basic workflow:\n"
             "1. Select one PDF, multiple PDFs, or a PDF folder.\n"
-            "2. Choose the output .tex file or project folder target.\n"
+            "2. Choose a single .tex file target or a structured project folder target.\n"
             "3. Configure an OpenAI-compatible vision model, Base URL, and API Key.\n"
             "4. Click Add Task to queue work, then Start to run pending tasks.\n\n"
-            "The GUI manages conversion tasks and writes results. It does not compile LaTeX; compile the generated .tex files in your local TeX environment when needed."
+            "The task queue shows stages, progress, cache hits, retries, failures, and completed outputs. The interface supports light and dark themes, Chinese/English switching, font size settings, and path memory."
         ),
         "status.ready": "Ready",
         "command.subtitle": "PDF to LaTeX converter",

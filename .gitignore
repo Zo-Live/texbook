@@ -352,6 +352,12 @@ $RECYCLE.BIN/
 out/*
 build/*
 
+### Local LaTeX workflow ###
+.latexmkrc
+src/.latexmkrc
+scripts/post-build.sh
+tests/test_latex_build_config.py
+
 ### Python ###
 __pycache__/
 *.py[cod]
