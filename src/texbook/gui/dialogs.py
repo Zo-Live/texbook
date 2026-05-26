@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QCloseEvent, QFontDatabase, QHideEvent, QShowEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -23,7 +23,7 @@ from texbook.gui.display import (
 )
 from texbook.gui.i18n import tr
 from texbook.gui.theme import build_combo_popup_style
-from texbook.gui.widgets import FocusWheelComboBox, FocusWheelSpinBox
+from texbook.gui.widgets import FocusWheelComboBox, FocusWheelSpinBox, close_combo_popups
 
 
 class AboutDialog(QDialog):
@@ -83,6 +83,7 @@ class SettingsDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.MSWindowsFixedSizeDialogHint, True)
         self.setModal(True)
         self._initial_preferences = preferences
+        self._suppress_popup_event_cleanup = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -165,3 +166,38 @@ class SettingsDialog(QDialog):
 
     def selected_preferences(self) -> GuiDisplayPreferences:
         return self._preferences
+
+    def _close_popups(self) -> None:
+        close_combo_popups(self)
+
+    def hide(self) -> None:
+        self._close_popups()
+        self._suppress_popup_event_cleanup = True
+        super().hide()
+
+    def close(self) -> bool:
+        self._close_popups()
+        self._suppress_popup_event_cleanup = True
+        return super().close()
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() in {
+            QEvent.Type.ActivationChange,
+            QEvent.Type.WindowStateChange,
+        }:
+            self._close_popups()
+        super().changeEvent(event)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        if not self._suppress_popup_event_cleanup:
+            self._close_popups()
+        super().hideEvent(event)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._suppress_popup_event_cleanup:
+            self._close_popups()
+        super().closeEvent(event)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        self._suppress_popup_event_cleanup = False
+        super().showEvent(event)

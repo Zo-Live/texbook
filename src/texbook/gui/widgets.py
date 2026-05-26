@@ -146,29 +146,32 @@ def close_combo_popup(combo_box: QComboBox) -> None:
     combo_box.hidePopup()
 
 
-def close_combo_popups(root: QWidget | None = None, *, exclude: QComboBox | None = None) -> None:
-    """Close combo-box popups under a root widget and any active Qt popup window."""
+def _application_combo_boxes() -> list[QComboBox]:
     app = QApplication.instance()
-    combo_boxes: list[QComboBox] = root.findChildren(QComboBox) if root is not None else []
+    if app is None:
+        return []
+    combo_boxes: list[QComboBox] = []
+    seen: set[int] = set()
+    for widget in app.topLevelWidgets():
+        for combo_box in widget.findChildren(QComboBox):
+            combo_id = id(combo_box)
+            if combo_id in seen:
+                continue
+            seen.add(combo_id)
+            combo_boxes.append(combo_box)
+    return combo_boxes
+
+
+def close_combo_popups(root: QWidget | None = None, *, exclude: QComboBox | None = None) -> None:
+    """Close visible combo-box popups without directly closing Qt popup windows."""
+    combo_boxes: list[QComboBox] = (
+        root.findChildren(QComboBox) if root is not None else _application_combo_boxes()
+    )
 
     for combo_box in combo_boxes:
         if combo_box is exclude:
             continue
         close_combo_popup(combo_box)
-
-    if app is None:
-        return
-
-    active_popup = app.activePopupWidget()
-    if active_popup is not None:
-        active_popup.hide()
-        active_popup.close()
-
-    if root is None:
-        for widget in app.topLevelWidgets():
-            if widget.windowFlags() & Qt.WindowType.Popup:
-                widget.hide()
-                widget.close()
 
 
 class ComboPopupItemDelegate(QStyledItemDelegate):

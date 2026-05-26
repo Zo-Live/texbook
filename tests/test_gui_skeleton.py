@@ -79,7 +79,11 @@ from texbook.gui.tasks import (  # noqa: E402
     mark_task_failed,
     mark_task_running,
 )
-from texbook.gui.widgets import ComboPopupItemDelegate, FocusWheelComboBox  # noqa: E402
+from texbook.gui.widgets import (  # noqa: E402
+    ComboPopupItemDelegate,
+    FocusWheelComboBox,
+    close_combo_popups,
+)
 from texbook.llm.scheduler import ProgressEvent  # noqa: E402
 from texbook.llm.pipeline import LLMConversionResult  # noqa: E402
 from texbook.output_options import BeamerBoxStyle, CtexFontProfile  # noqa: E402
@@ -194,6 +198,16 @@ class _FakeSignal:
 
 
 class PopupTrackingComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.hide_popup_calls = 0
+
+    def hidePopup(self):
+        self.hide_popup_calls += 1
+        super().hidePopup()
+
+
+class TrackingFocusWheelComboBox(FocusWheelComboBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.hide_popup_calls = 0
@@ -452,11 +466,95 @@ def test_main_window_closes_combo_popups_on_state_changes():
 
     combo.showPopup()
 
-    window.changeEvent(QEvent(QEvent.Type.Hide))
+    calls_before_hide = combo.hide_popup_calls
+    window.hide()
 
-    assert combo.hide_popup_calls == 4
+    assert combo.hide_popup_calls >= calls_before_hide + 1
+    assert combo.view().isVisible() is False
+    combo.showPopup()
+    try:
+        assert combo.view().isVisible() is True
+    finally:
+        combo.hidePopup()
 
     window.close()
+    app.quit()
+
+
+def test_app_level_popup_cleanup_covers_settings_dialog_combo():
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    dialog = SettingsDialog(
+        window,
+        preferences=GuiDisplayPreferences(
+            theme=GuiThemeMode.dark,
+            language=GuiLanguage.zh_CN,
+            font_family="Segoe UI",
+            font_point_size=13,
+        ),
+    )
+    dialog.show()
+    combo = dialog.findChild(FocusWheelComboBox, "settingsFontFamilyCombo")
+    combo.showPopup()
+
+    close_combo_popups()
+
+    assert combo.view().isVisible() is False
+    combo.showPopup()
+    try:
+        assert combo.view().isVisible() is True
+    finally:
+        combo.hidePopup()
+
+    dialog.close()
+    window.close()
+    app.quit()
+
+
+def test_settings_dialog_closes_font_combo_popup_on_lifecycle_events():
+    app = create_application(["texbook-gui-test"])
+    dialog = SettingsDialog(
+        preferences=GuiDisplayPreferences(
+            theme=GuiThemeMode.dark,
+            language=GuiLanguage.zh_CN,
+            font_family="Segoe UI",
+            font_point_size=13,
+        )
+    )
+    combo = TrackingFocusWheelComboBox(dialog)
+    combo.addItems(["one", "two"])
+    combo.show()
+    dialog.show()
+
+    close_combo_popups(dialog)
+
+    assert combo.hide_popup_calls == 0
+
+    combo.showPopup()
+    dialog.changeEvent(QEvent(QEvent.Type.ActivationChange))
+
+    assert combo.hide_popup_calls == 1
+    assert combo.view().isVisible() is False
+
+    combo.showPopup()
+    assert combo.view().isVisible() is True
+
+    calls_before_hide = combo.hide_popup_calls
+    dialog.hide()
+
+    assert combo.hide_popup_calls >= calls_before_hide + 1
+    assert combo.view().isVisible() is False
+
+    dialog.show()
+    combo.showPopup()
+    assert combo.view().isVisible() is True
+
+    calls_before_close = combo.hide_popup_calls
+    dialog.close()
+
+    assert combo.hide_popup_calls >= calls_before_close + 1
+    assert combo.view().isVisible() is False
+
     app.quit()
 
 
