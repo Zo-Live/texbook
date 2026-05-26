@@ -1,6 +1,6 @@
 # TexBook
 
-PDF 转 LaTeX 的 Python CLI 工具。它面向中文数学讲义：先从 PDF 提取页面文本、位置、字号并渲染页面图像，再调用 OpenAI-compatible 视觉模型重建 LaTeX 正文片段，最后由本地代码生成完整 `.tex` 文档。
+PDF 转 LaTeX 的 Python CLI 工具。它面向数学讲义：先从 PDF 提取页面文本、位置、字号并渲染页面图像，再调用 OpenAI-compatible 视觉模型重建 LaTeX 正文片段，最后由本地代码生成完整 `.tex` 文档。
 
 ## 环境要求
 
