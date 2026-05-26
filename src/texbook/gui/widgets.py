@@ -38,15 +38,16 @@ class SectionPanel(QFrame):
         header = QVBoxLayout()
         header.setSpacing(3)
 
-        title_label = QLabel(title, self)
-        title_label.setProperty("sectionTitle", True)
-        header.addWidget(title_label)
+        self.title_label = QLabel(title, self)
+        self.title_label.setProperty("sectionTitle", True)
+        header.addWidget(self.title_label)
 
+        self.subtitle_label: QLabel | None = None
         if subtitle:
-            subtitle_label = QLabel(subtitle, self)
-            subtitle_label.setProperty("muted", True)
-            subtitle_label.setWordWrap(True)
-            header.addWidget(subtitle_label)
+            self.subtitle_label = QLabel(subtitle, self)
+            self.subtitle_label.setProperty("muted", True)
+            self.subtitle_label.setWordWrap(True)
+            header.addWidget(self.subtitle_label)
 
         layout.addLayout(header)
 
@@ -55,6 +56,15 @@ class SectionPanel(QFrame):
         self.body_layout.setContentsMargins(0, 0, 0, 0)
         self.body_layout.setSpacing(10)
         layout.addWidget(self.body)
+
+    def set_title(self, title: str) -> None:
+        """Update the visible section title."""
+        self.title_label.setText(title)
+
+    def set_subtitle(self, subtitle: str) -> None:
+        """Update the visible section subtitle."""
+        if self.subtitle_label is not None:
+            self.subtitle_label.setText(subtitle)
 
 
 class OptionGrid(QWidget):
@@ -70,13 +80,14 @@ class OptionGrid(QWidget):
         self.layout.setColumnStretch(1, 1)
         self._row = 0
 
-    def add_row(self, label: str, control: QWidget) -> None:
+    def add_row(self, label: str, control: QWidget) -> QLabel:
         label_widget = QLabel(label, self)
         label_widget.setProperty("rowLabel", True)
         label_widget.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.layout.addWidget(label_widget, self._row, 0)
         self.layout.addWidget(control, self._row, 1)
         self._row += 1
+        return label_widget
 
 
 class InlineField(QWidget):
@@ -101,12 +112,16 @@ class MetricPill(QFrame):
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(2)
 
-        value_label = QLabel(value, self)
-        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        value_label.setProperty("sectionTitle", True)
-        layout.addWidget(value_label)
+        self.value_label = QLabel(value, self)
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.value_label.setProperty("sectionTitle", True)
+        layout.addWidget(self.value_label)
 
-        label_widget = QLabel(label, self)
-        label_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label_widget.setProperty("muted", True)
-        layout.addWidget(label_widget)
+        self.label_widget = QLabel(label, self)
+        self.label_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_widget.setProperty("muted", True)
+        layout.addWidget(self.label_widget)
+
+    def set_label(self, label: str) -> None:
+        """Update the metric label."""
+        self.label_widget.setText(label)

@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
 from PySide6.QtCore import QSettings, QStandardPaths
 
+from texbook.gui.display import (
+    GuiDisplayPreferences,
+    coerce_language,
+    coerce_theme_mode,
+)
 from texbook.gui.resources import APP_DISPLAY_NAME, APP_ORGANIZATION_NAME
 from texbook.gui.selection import GuiInputKind, GuiInputSelection, GuiPathSelectionState
 from texbook.gui.settings import GuiApiKeySource, GuiConversionSettings, GuiOutputKind
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,7 @@ class GuiPersistentState:
 
     settings: GuiConversionSettings
     path_memory: GuiPathMemory
+    display_preferences: GuiDisplayPreferences = field(default_factory=GuiDisplayPreferences)
 
 
 class GuiSettingsStore:
@@ -73,12 +79,14 @@ class GuiSettingsStore:
         return GuiPersistentState(
             settings=self.load_conversion_settings(),
             path_memory=self.load_path_memory(),
+            display_preferences=self.load_display_preferences(),
         )
 
     def save_state(self, state: GuiPersistentState) -> None:
         """Persist GUI settings and path memory."""
         self.save_conversion_settings(state.settings)
         self.save_path_memory(state.path_memory)
+        self.save_display_preferences(state.display_preferences)
 
     def load_conversion_settings(self) -> GuiConversionSettings:
         """Load conversion settings without restoring active path selections."""
@@ -247,6 +255,27 @@ class GuiSettingsStore:
         self._settings.setValue("paths/last_input_directory", path_memory.last_input_directory)
         self._settings.setValue("paths/last_output_directory", path_memory.last_output_directory)
         self._settings.setValue("paths/last_cache_directory", path_memory.last_cache_directory)
+        self._settings.sync()
+
+    def load_display_preferences(self) -> GuiDisplayPreferences:
+        """Load persisted theme and language preferences."""
+        defaults = GuiDisplayPreferences()
+        return GuiDisplayPreferences(
+            theme=coerce_theme_mode(
+                self._read_str("display/theme", defaults.theme.value),
+                defaults.theme,
+            ),
+            language=coerce_language(
+                self._read_str("display/language", defaults.language.value),
+                defaults.language,
+            ),
+        )
+
+    def save_display_preferences(self, preferences: GuiDisplayPreferences) -> None:
+        """Save theme and language preferences."""
+        self._settings.setValue("schema_version", SCHEMA_VERSION)
+        self._settings.setValue("display/theme", preferences.theme.value)
+        self._settings.setValue("display/language", preferences.language.value)
         self._settings.sync()
 
     def default_dialog_directory(self) -> str:

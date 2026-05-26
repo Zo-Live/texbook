@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
 )
 
 from texbook.gui.executor import GuiOverwriteConfirmationRequest, GuiTaskExecutor
+from texbook.gui.display import GuiDisplayPreferences, GuiLanguage, GuiThemeMode
+from texbook.gui.i18n import tr
 from texbook.gui.persistence import (
     GuiPathMemory,
     join_dialog_path,
@@ -38,7 +40,6 @@ from texbook.gui.selection import (
     GuiInputKind,
     GuiInputSelection,
     GuiPathSelectionState,
-    input_kind_from_label,
 )
 from texbook.gui.settings import (
     GuiApiKeySource,
@@ -62,17 +63,46 @@ from texbook.gui.tasks import (
     mark_task_completed,
     mark_task_failed,
     mark_task_running,
+    task_recent_event_text,
+    task_stage_label,
+    task_status_label,
 )
 from texbook.gui.widgets import InlineField, MetricPill, OptionGrid, SectionPanel
+from texbook.gui.theme import build_fluent_stylesheet
 from texbook.llm.scheduler import ProgressEvent
+
+
+_INPUT_KIND_ITEMS = (
+    (GuiInputKind.single_file.value, "option.input.single_file"),
+    (GuiInputKind.multiple_files.value, "option.input.multiple_files"),
+    (GuiInputKind.directory.value, "option.input.directory"),
+)
+
+_OUTPUT_KIND_ITEMS = (
+    (GuiOutputKind.tex_file.value, "option.output.tex_file"),
+    (GuiOutputKind.project.value, "option.output.project"),
+)
+
+_API_KEY_SOURCE_ITEMS = (
+    (GuiApiKeySource.direct.value, "option.api_key.direct"),
+    (GuiApiKeySource.environment.value, "option.api_key.environment"),
+)
 
 
 class ConversionMainPanel(QWidget):
     """Fluent Design main panel shown when the GUI opens."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    display_preferences_changed = Signal(object)
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        display_preferences: GuiDisplayPreferences | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("conversionMainPanel")
+        self._display_preferences = display_preferences or GuiDisplayPreferences()
         self.selection_state = GuiPathSelectionState()
         self.path_memory = GuiPathMemory()
         self.tasks = []
@@ -80,6 +110,9 @@ class ConversionMainPanel(QWidget):
         self._task_rows: dict[str, QFrame] = {}
         self._executor: GuiTaskExecutor | None = None
         self._executor_factory = GuiTaskExecutor
+        self._sections: dict[str, SectionPanel] = {}
+        self._row_labels: dict[str, QLabel] = {}
+        self._metric_pills: dict[GuiTaskStatus, MetricPill] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 18)
@@ -94,7 +127,20 @@ class ConversionMainPanel(QWidget):
         layout.addLayout(content, 1)
 
         self._connect_selection_controls()
+        self._apply_theme()
+        self._retranslate_ui()
         self._refresh_path_state()
+
+    @property
+    def _language(self) -> GuiLanguage:
+        return self._display_preferences.language
+
+    @property
+    def _theme(self) -> GuiThemeMode:
+        return self._display_preferences.theme
+
+    def _tr(self, key: str, **kwargs: object) -> str:
+        return tr(self._language, key, **kwargs)
 
     def _create_command_bar(self) -> QFrame:
         command_bar = QFrame(self)
@@ -110,32 +156,37 @@ class ConversionMainPanel(QWidget):
         title.setObjectName("appTitleLabel")
         title_group.addWidget(title)
 
-        subtitle = QLabel("PDF 转 LaTeX 转换工具", command_bar)
+        subtitle = QLabel(command_bar)
         subtitle.setObjectName("appSubtitleLabel")
+        self.subtitle_label = subtitle
         title_group.addWidget(subtitle)
 
         layout.addLayout(title_group, 1)
-        layout.addWidget(self._make_tool_button("themeButton", "浅色", QStyle.StandardPixmap.SP_DesktopIcon))
-        layout.addWidget(
-            self._make_tool_button(
-                "languageButton",
-                "中文",
-                QStyle.StandardPixmap.SP_FileDialogDetailedView,
-            )
+        self.theme_button = self._make_tool_button(
+            "themeButton",
+            "",
+            QStyle.StandardPixmap.SP_DesktopIcon,
         )
+        self.theme_button.setEnabled(True)
+        layout.addWidget(self.theme_button)
+        self.language_button = self._make_tool_button(
+            "languageButton",
+            "",
+            QStyle.StandardPixmap.SP_FileDialogDetailedView,
+        )
+        self.language_button.setEnabled(True)
+        layout.addWidget(self.language_button)
 
-        add_task = QPushButton("添加任务", command_bar)
+        add_task = QPushButton(command_bar)
         add_task.setObjectName("addTaskButton")
         add_task.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder))
-        add_task.setToolTip("选择 PDF 输入和产物目录后可添加任务。")
         add_task.setEnabled(False)
         self.add_task_button = add_task
         layout.addWidget(add_task)
 
-        start = QPushButton("开始转换", command_bar)
+        start = QPushButton(command_bar)
         start.setObjectName("startButton")
         start.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-        start.setToolTip("开始执行队列中的待处理任务。")
         start.setEnabled(False)
         self.start_button = start
         layout.addWidget(start)
@@ -174,104 +225,151 @@ class ConversionMainPanel(QWidget):
         scroll.setWidget(pane)
         return scroll
 
+    def _register_section(self, key: str, panel: SectionPanel) -> SectionPanel:
+        self._sections[key] = panel
+        return panel
+
+    def _add_grid_row(
+        self,
+        grid: OptionGrid,
+        key: str,
+        control: QWidget,
+    ) -> None:
+        self._row_labels[key] = grid.add_row("", control)
+
+    def _set_combo_items(
+        self,
+        combo: QComboBox,
+        items: tuple[tuple[str, str], ...],
+        current_value: str | None = None,
+    ) -> None:
+        value = current_value if current_value is not None else self._combo_value(combo)
+        blocker = QSignalBlocker(combo)
+        combo.clear()
+        for item_value, label_key in items:
+            combo.addItem(self._tr(label_key), item_value)
+        if value:
+            self._set_combo_value(combo, value)
+        del blocker
+
+    def _combo_value(self, combo: QComboBox) -> str:
+        data = combo.currentData()
+        if data is not None:
+            return str(data)
+        return combo.currentText()
+
+    def _set_combo_value(self, combo: QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        if index < 0:
+            index = combo.findText(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
     def _create_input_panel(self) -> SectionPanel:
-        panel = SectionPanel("输入", object_name="inputPanel", parent=self)
+        panel = self._register_section(
+            "section.input",
+            SectionPanel("", object_name="inputPanel", parent=self),
+        )
         grid = OptionGrid(parent=panel)
 
         pdf_input = QLineEdit(panel)
         pdf_input.setObjectName("pdfInputField")
-        pdf_input.setPlaceholderText("选择 PDF 文件或目录")
         pdf_input.setReadOnly(True)
         self.pdf_input_field = pdf_input
         browse = self._make_icon_button(
             "pdfInputBrowseButton",
             QStyle.StandardPixmap.SP_DialogOpenButton,
-            "浏览 PDF 输入",
+            "",
         )
         self.pdf_input_browse_button = browse
-        grid.add_row("PDF 输入", InlineField(pdf_input, browse, parent=panel))
+        self._add_grid_row(grid, "field.pdf_input", InlineField(pdf_input, browse, parent=panel))
 
         input_type = QComboBox(panel)
         input_type.setObjectName("inputTypeCombo")
-        input_type.addItems(["单个 PDF", "多个 PDF", "目录批量"])
+        self._set_combo_items(input_type, _INPUT_KIND_ITEMS, GuiInputKind.single_file.value)
         self.input_type_combo = input_type
-        grid.add_row("输入类型", input_type)
+        self._add_grid_row(grid, "field.input_type", input_type)
 
         batch_pattern = QLineEdit(panel)
         batch_pattern.setObjectName("batchPatternField")
         batch_pattern.setPlaceholderText("*.pdf")
         batch_pattern.setText("*.pdf")
         self.batch_pattern_field = batch_pattern
-        grid.add_row("批量匹配", batch_pattern)
+        self._add_grid_row(grid, "field.batch_pattern", batch_pattern)
 
         panel.body_layout.addWidget(grid)
         return panel
 
     def _create_output_panel(self) -> SectionPanel:
-        panel = SectionPanel("输出", object_name="outputPanel", parent=self)
+        panel = self._register_section(
+            "section.output",
+            SectionPanel("", object_name="outputPanel", parent=self),
+        )
         grid = OptionGrid(parent=panel)
 
         output_kind = QComboBox(panel)
         output_kind.setObjectName("outputKindCombo")
-        output_kind.addItems(["单个 .tex", "目录化项目"])
+        self._set_combo_items(output_kind, _OUTPUT_KIND_ITEMS, GuiOutputKind.tex_file.value)
         self.output_kind_combo = output_kind
-        grid.add_row("输出形式", output_kind)
+        self._add_grid_row(grid, "field.output_kind", output_kind)
 
         output_dir = QLineEdit(panel)
         output_dir.setObjectName("outputDirectoryField")
-        output_dir.setPlaceholderText("选择输出目标")
         output_dir.setReadOnly(True)
         self.output_directory_field = output_dir
         browse = self._make_icon_button(
             "outputBrowseButton",
             QStyle.StandardPixmap.SP_DirOpenIcon,
-            "浏览输出目标",
+            "",
         )
         self.output_browse_button = browse
-        self.output_target_label = "输出目标"
-        grid.add_row("输出目标", InlineField(output_dir, browse, parent=panel))
+        self._add_grid_row(grid, "field.output_target", InlineField(output_dir, browse, parent=panel))
 
-        overwrite = QCheckBox("覆盖前确认", panel)
+        overwrite = QCheckBox(panel)
         overwrite.setObjectName("confirmOverwriteCheckBox")
         overwrite.setChecked(True)
         self.confirm_overwrite_checkbox = overwrite
-        grid.add_row("写盘策略", overwrite)
+        self._add_grid_row(grid, "field.write_policy", overwrite)
 
         panel.body_layout.addWidget(grid)
         return panel
 
     def _create_page_document_panel(self) -> SectionPanel:
-        panel = SectionPanel("页面范围", object_name="pageOptionsPanel", parent=self)
+        panel = self._register_section(
+            "section.page",
+            SectionPanel("", object_name="pageOptionsPanel", parent=self),
+        )
         grid = OptionGrid(parent=panel)
 
         pages = QLineEdit(panel)
         pages.setObjectName("pagesField")
-        pages.setPlaceholderText("全部页面")
         self.pages_field = pages
-        grid.add_row("页面范围", pages)
+        self._add_grid_row(grid, "field.pages", pages)
 
         manual_title = QLineEdit(panel)
         manual_title.setObjectName("manualTitleField")
-        manual_title.setPlaceholderText("默认使用 PDF 文件名")
         self.manual_title_field = manual_title
-        grid.add_row("手动标题", manual_title)
+        self._add_grid_row(grid, "field.manual_title", manual_title)
 
         title_source = QComboBox(panel)
         title_source.setObjectName("titleSourceCombo")
         title_source.addItems(["filename", "llm"])
         self.title_source_combo = title_source
-        grid.add_row("标题来源", title_source)
+        self._add_grid_row(grid, "field.title_source", title_source)
 
-        show_date = QCheckBox("显示日期", panel)
+        show_date = QCheckBox(panel)
         show_date.setObjectName("showDateCheckBox")
         self.show_date_checkbox = show_date
-        grid.add_row("日期", show_date)
+        self._add_grid_row(grid, "field.date", show_date)
 
         panel.body_layout.addWidget(grid)
         return panel
 
     def _create_document_panel(self) -> SectionPanel:
-        panel = SectionPanel("文档类", object_name="documentOptionsPanel", parent=self)
+        panel = self._register_section(
+            "section.document",
+            SectionPanel("", object_name="documentOptionsPanel", parent=self),
+        )
         grid = OptionGrid(parent=panel)
 
         document_class = QComboBox(panel)
@@ -280,40 +378,43 @@ class ConversionMainPanel(QWidget):
             ["auto", "ctexart", "ctexbook", "ctexbeamer", "article", "book", "beamer"]
         )
         self.document_class_combo = document_class
-        grid.add_row("文档类", document_class)
+        self._add_grid_row(grid, "field.document_class", document_class)
 
         structure = QComboBox(panel)
         structure.setObjectName("structureModeCombo")
         structure.addItems(["auto", "off", "local", "llm"])
         self.structure_mode_combo = structure
-        grid.add_row("结构规划", structure)
+        self._add_grid_row(grid, "field.structure", structure)
 
         structure_chunk_pages = self._make_spin_box("structureChunkPagesSpinBox", 1, 128, 8)
         self.structure_chunk_pages_spin_box = structure_chunk_pages
-        grid.add_row("规划 Chunk 页数", structure_chunk_pages)
+        self._add_grid_row(grid, "field.structure_chunk_pages", structure_chunk_pages)
 
         structure_max_pages = self._make_spin_box("structureMaxPagesSpinBox", 1, 4096, 32)
         self.structure_max_pages_spin_box = structure_max_pages
-        grid.add_row("规划最大页数", structure_max_pages)
+        self._add_grid_row(grid, "field.structure_max_pages", structure_max_pages)
 
-        title_page = QCheckBox("生成 Beamer 标题页", panel)
+        title_page = QCheckBox(panel)
         title_page.setObjectName("beamerTitlePageCheckBox")
         title_page.setChecked(True)
         self.beamer_title_page_checkbox = title_page
-        grid.add_row("标题页", title_page)
+        self._add_grid_row(grid, "field.title_page", title_page)
 
         panel.body_layout.addWidget(grid)
         return panel
 
     def _create_model_panel(self) -> SectionPanel:
-        panel = SectionPanel("模型配置", object_name="modelOptionsPanel", parent=self)
+        panel = self._register_section(
+            "section.model",
+            SectionPanel("", object_name="modelOptionsPanel", parent=self),
+        )
         grid = OptionGrid(parent=panel)
 
         model = QLineEdit(panel)
         model.setObjectName("modelField")
         model.setPlaceholderText("TEXBOOK_MODEL")
         self.model_field = model
-        grid.add_row("模型", model)
+        self._add_grid_row(grid, "field.model", model)
 
         base_url = QLineEdit(panel)
         base_url.setObjectName("baseUrlField")
@@ -328,9 +429,9 @@ class ConversionMainPanel(QWidget):
 
         api_key_source = QComboBox(panel)
         api_key_source.setObjectName("apiKeySourceCombo")
-        api_key_source.addItems(["直接输入", "环境变量名"])
+        self._set_combo_items(api_key_source, _API_KEY_SOURCE_ITEMS, GuiApiKeySource.direct.value)
         self.api_key_source_combo = api_key_source
-        grid.add_row("Key 来源", api_key_source)
+        self._add_grid_row(grid, "field.key_source", api_key_source)
         grid.add_row("API Key", api_key)
 
         preset = QComboBox(panel)
@@ -338,26 +439,28 @@ class ConversionMainPanel(QWidget):
         preset.setEditable(True)
         preset.addItem("chinese-math")
         self.prompt_preset_combo = preset
-        grid.add_row("Prompt 预设", preset)
+        self._add_grid_row(grid, "field.prompt_preset", preset)
 
         extra_prompt = QTextEdit(panel)
         extra_prompt.setObjectName("extraPromptEdit")
-        extra_prompt.setPlaceholderText("追加一次性转换要求")
         self.extra_prompt_edit = extra_prompt
-        grid.add_row("额外要求", extra_prompt)
+        self._add_grid_row(grid, "field.extra_prompt", extra_prompt)
 
         panel.body_layout.addWidget(grid)
         return panel
 
     def _create_cache_panel(self) -> SectionPanel:
-        panel = SectionPanel("缓存与并发", object_name="cacheConcurrencyPanel", parent=self)
+        panel = self._register_section(
+            "section.cache",
+            SectionPanel("", object_name="cacheConcurrencyPanel", parent=self),
+        )
         grid = OptionGrid(parent=panel)
 
-        cache_enabled = QCheckBox("启用缓存", panel)
+        cache_enabled = QCheckBox(panel)
         cache_enabled.setObjectName("cacheEnabledCheckBox")
         cache_enabled.setChecked(True)
         self.cache_enabled_checkbox = cache_enabled
-        grid.add_row("缓存", cache_enabled)
+        self._add_grid_row(grid, "field.cache", cache_enabled)
 
         cache_dir = QLineEdit(panel)
         cache_dir.setObjectName("cacheDirectoryField")
@@ -367,27 +470,27 @@ class ConversionMainPanel(QWidget):
         browse = self._make_icon_button(
             "cacheBrowseButton",
             QStyle.StandardPixmap.SP_DirOpenIcon,
-            "浏览缓存目录",
+            "",
         )
         self.cache_browse_button = browse
-        grid.add_row("缓存目录", InlineField(cache_dir, browse, parent=panel))
+        self._add_grid_row(grid, "field.cache_directory", InlineField(cache_dir, browse, parent=panel))
 
-        clear_cache = QCheckBox("转换前清理匹配缓存", panel)
+        clear_cache = QCheckBox(panel)
         clear_cache.setObjectName("clearCacheCheckBox")
         self.clear_cache_checkbox = clear_cache
-        grid.add_row("清理缓存", clear_cache)
+        self._add_grid_row(grid, "field.clear_cache", clear_cache)
 
         chunk_pages = self._make_spin_box("chunkPagesSpinBox", 1, 64, 4)
         self.chunk_pages_spin_box = chunk_pages
-        grid.add_row("Chunk 页数", chunk_pages)
+        self._add_grid_row(grid, "field.chunk_pages", chunk_pages)
 
         prefetch = self._make_spin_box("prefetchChunksSpinBox", 0, 16, 1)
         self.prefetch_chunks_spin_box = prefetch
-        grid.add_row("预渲染", prefetch)
+        self._add_grid_row(grid, "field.prefetch", prefetch)
 
         llm_concurrency = self._make_spin_box("llmConcurrencySpinBox", 1, 16, 1)
         self.llm_concurrency_spin_box = llm_concurrency
-        grid.add_row("LLM 并发", llm_concurrency)
+        self._add_grid_row(grid, "field.llm_concurrency", llm_concurrency)
 
         llm_interval = QDoubleSpinBox(panel)
         llm_interval.setObjectName("llmIntervalSpinBox")
@@ -397,46 +500,48 @@ class ConversionMainPanel(QWidget):
         llm_interval.setValue(0.0)
         llm_interval.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         self.llm_min_request_interval_spin_box = llm_interval
-        grid.add_row("请求间隔", llm_interval)
+        self._add_grid_row(grid, "field.request_interval", llm_interval)
 
         batch_workers = self._make_spin_box("batchWorkersSpinBox", 1, 16, 1)
         self.batch_workers_spin_box = batch_workers
-        grid.add_row("批量 Worker", batch_workers)
+        self._add_grid_row(grid, "field.batch_workers", batch_workers)
 
         panel.body_layout.addWidget(grid)
         return panel
 
     def _create_advanced_panel(self) -> SectionPanel:
-        panel = SectionPanel("高级参数", object_name="advancedOptionsPanel", parent=self)
+        panel = self._register_section(
+            "section.advanced",
+            SectionPanel("", object_name="advancedOptionsPanel", parent=self),
+        )
         grid = OptionGrid(parent=panel)
 
         image_dpi = self._make_spin_box("imageDpiSpinBox", 72, 600, 160)
         self.image_dpi_spin_box = image_dpi
-        grid.add_row("图像 DPI", image_dpi)
+        self._add_grid_row(grid, "field.image_dpi", image_dpi)
 
         image_dpi_min = self._make_spin_box("imageDpiMinSpinBox", 1, 600, 100)
         self.image_dpi_min_spin_box = image_dpi_min
-        grid.add_row("图像 DPI 下限", image_dpi_min)
+        self._add_grid_row(grid, "field.image_dpi_min", image_dpi_min)
 
         image_dpi_max = self._make_spin_box("imageDpiMaxSpinBox", 0, 600, 0)
-        image_dpi_max.setSpecialValueText("默认 DPI")
         self.image_dpi_max_spin_box = image_dpi_max
-        grid.add_row("图像 DPI 上限", image_dpi_max)
+        self._add_grid_row(grid, "field.image_dpi_max", image_dpi_max)
 
         image_format = QComboBox(panel)
         image_format.setObjectName("imageFormatCombo")
         image_format.addItems(["auto", "png", "jpeg"])
         image_format.setCurrentText("png")
         self.image_format_combo = image_format
-        grid.add_row("图像格式", image_format)
+        self._add_grid_row(grid, "field.image_format", image_format)
 
         jpeg_quality = self._make_spin_box("jpegQualitySpinBox", 1, 100, 85)
         self.jpeg_quality_spin_box = jpeg_quality
-        grid.add_row("JPEG 质量", jpeg_quality)
+        self._add_grid_row(grid, "field.jpeg_quality", jpeg_quality)
 
         retries = self._make_spin_box("llmRetriesSpinBox", 0, 10, 2)
         self.llm_retries_spin_box = retries
-        grid.add_row("重试次数", retries)
+        self._add_grid_row(grid, "field.retries", retries)
 
         retry_initial_delay = QDoubleSpinBox(panel)
         retry_initial_delay.setObjectName("llmRetryInitialDelaySpinBox")
@@ -446,7 +551,7 @@ class ConversionMainPanel(QWidget):
         retry_initial_delay.setValue(2.0)
         retry_initial_delay.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         self.llm_retry_initial_delay_spin_box = retry_initial_delay
-        grid.add_row("初始重试延迟", retry_initial_delay)
+        self._add_grid_row(grid, "field.retry_initial_delay", retry_initial_delay)
 
         retry_max_delay = QDoubleSpinBox(panel)
         retry_max_delay.setObjectName("llmRetryMaxDelaySpinBox")
@@ -456,7 +561,7 @@ class ConversionMainPanel(QWidget):
         retry_max_delay.setValue(30.0)
         retry_max_delay.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         self.llm_retry_max_delay_spin_box = retry_max_delay
-        grid.add_row("最大重试延迟", retry_max_delay)
+        self._add_grid_row(grid, "field.retry_max_delay", retry_max_delay)
 
         timeout = QDoubleSpinBox(panel)
         timeout.setObjectName("timeoutSpinBox")
@@ -464,10 +569,9 @@ class ConversionMainPanel(QWidget):
         timeout.setDecimals(1)
         timeout.setSingleStep(1.0)
         timeout.setValue(0.0)
-        timeout.setSpecialValueText("不限制")
         timeout.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         self.timeout_spin_box = timeout
-        grid.add_row("LLM 超时", timeout)
+        self._add_grid_row(grid, "field.timeout", timeout)
 
         temperature = QDoubleSpinBox(panel)
         temperature.setObjectName("temperatureSpinBox")
@@ -486,19 +590,22 @@ class ConversionMainPanel(QWidget):
         beamer_style.setObjectName("beamerBoxStyleCombo")
         beamer_style.addItems(["block", "tcolorbox"])
         self.beamer_box_style_combo = beamer_style
-        grid.add_row("Beamer 块", beamer_style)
+        self._add_grid_row(grid, "field.beamer_box", beamer_style)
 
         ctex_font = QComboBox(panel)
         ctex_font.setObjectName("ctexFontProfileCombo")
         ctex_font.addItems(["default", "local"])
         self.ctex_font_profile_combo = ctex_font
-        grid.add_row("CTeX 字体", ctex_font)
+        self._add_grid_row(grid, "field.ctex_font", ctex_font)
 
         panel.body_layout.addWidget(grid)
         return panel
 
     def _create_task_list_panel(self) -> SectionPanel:
-        panel = SectionPanel("任务队列", object_name="taskListPanel", parent=self)
+        panel = self._register_section(
+            "section.tasks",
+            SectionPanel("", object_name="taskListPanel", parent=self),
+        )
         panel.setMinimumWidth(330)
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
@@ -507,7 +614,7 @@ class ConversionMainPanel(QWidget):
         metrics.setHorizontalSpacing(8)
         metrics.setVerticalSpacing(8)
         self.task_metric_labels = {}
-        for index, (label, value, key) in enumerate(
+        for index, (_label, value, key) in enumerate(
             [
                 ("待处理", "0", GuiTaskStatus.pending),
                 ("运行中", "0", GuiTaskStatus.running),
@@ -517,8 +624,9 @@ class ConversionMainPanel(QWidget):
                 ("失败", "0", GuiTaskStatus.failed),
             ]
         ):
-            metric = MetricPill(label, value, parent=panel)
-            self.task_metric_labels[key] = metric.findChildren(QLabel)[0]
+            metric = MetricPill("", value, parent=panel)
+            self._metric_pills[key] = metric
+            self.task_metric_labels[key] = metric.value_label
             metrics.addWidget(metric, index // 2, index % 2)
         panel.body_layout.addLayout(metrics)
 
@@ -535,17 +643,18 @@ class ConversionMainPanel(QWidget):
         empty_layout.setContentsMargins(18, 28, 18, 28)
         empty_layout.setSpacing(8)
 
-        icon = QLabel("＋", empty)
+        icon = QLabel("+", empty)
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon.setProperty("sectionTitle", True)
         empty_layout.addWidget(icon)
 
-        title = QLabel("尚无转换任务", empty)
+        title = QLabel(empty)
+        title.setObjectName("taskEmptyTitleLabel")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setProperty("sectionTitle", True)
         empty_layout.addWidget(title)
 
-        status = QLabel("队列空闲", empty)
+        status = QLabel(empty)
         status.setObjectName("taskEmptyStatusLabel")
         status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status.setProperty("muted", True)
@@ -624,6 +733,8 @@ class ConversionMainPanel(QWidget):
         self.pdf_input_browse_button.clicked.connect(self._browse_pdf_input)
         self.output_browse_button.clicked.connect(self._browse_output_directory)
         self.cache_browse_button.clicked.connect(self._browse_cache_directory)
+        self.theme_button.clicked.connect(self.toggle_theme)
+        self.language_button.clicked.connect(self.toggle_language)
         self.input_type_combo.currentTextChanged.connect(self._change_input_kind)
         self.output_kind_combo.currentTextChanged.connect(self._sync_gui_state)
         self.batch_pattern_field.textChanged.connect(self._sync_gui_state)
@@ -672,14 +783,116 @@ class ConversionMainPanel(QWidget):
         self._sync_api_key_controls()
         self._sync_gui_state()
 
+    def current_display_preferences(self) -> GuiDisplayPreferences:
+        """Return current theme and language preferences."""
+        return self._display_preferences
+
+    def set_display_preferences(
+        self,
+        preferences: GuiDisplayPreferences,
+        *,
+        emit: bool = False,
+    ) -> None:
+        """Apply theme and language preferences to the current panel."""
+        self._display_preferences = preferences
+        self._apply_theme()
+        self._retranslate_ui()
+        self._refresh_path_state()
+        if emit:
+            self.display_preferences_changed.emit(preferences)
+
+    def toggle_theme(self) -> None:
+        """Switch between light and dark themes."""
+        next_theme = (
+            GuiThemeMode.dark if self._theme == GuiThemeMode.light else GuiThemeMode.light
+        )
+        self.set_display_preferences(
+            GuiDisplayPreferences(theme=next_theme, language=self._language),
+            emit=True,
+        )
+
+    def toggle_language(self) -> None:
+        """Switch between Chinese and English interface text."""
+        next_language = (
+            GuiLanguage.en_US if self._language == GuiLanguage.zh_CN else GuiLanguage.zh_CN
+        )
+        self.set_display_preferences(
+            GuiDisplayPreferences(theme=self._theme, language=next_language),
+            emit=True,
+        )
+
+    def _apply_theme(self) -> None:
+        self.setStyleSheet(build_fluent_stylesheet(self._theme))
+
+    def _retranslate_ui(self) -> None:
+        self.subtitle_label.setText(self._tr("command.subtitle"))
+        self.theme_button.setText(
+            self._tr("command.theme.dark")
+            if self._theme == GuiThemeMode.dark
+            else self._tr("command.theme.light")
+        )
+        self.theme_button.setToolTip(
+            self._tr("command.theme.switch_to_light")
+            if self._theme == GuiThemeMode.dark
+            else self._tr("command.theme.switch_to_dark")
+        )
+        self.language_button.setText(
+            self._tr("command.language.en")
+            if self._language == GuiLanguage.en_US
+            else self._tr("command.language.zh")
+        )
+        self.language_button.setToolTip(
+            self._tr("command.language.switch_to_zh")
+            if self._language == GuiLanguage.en_US
+            else self._tr("command.language.switch_to_en")
+        )
+        self.add_task_button.setText(self._tr("button.add_task"))
+        self.add_task_button.setToolTip(self._tr("button.add_task.tooltip"))
+        self.start_button.setText(self._tr("button.start"))
+        self.start_button.setToolTip(self._tr("button.start.tooltip"))
+
+        for key, section in self._sections.items():
+            section.set_title(self._tr(key))
+        for key, label in self._row_labels.items():
+            label.setText(self._tr(key))
+
+        self.pdf_input_field.setPlaceholderText(self._tr("placeholder.pdf_input"))
+        self.output_directory_field.setPlaceholderText(self._tr("placeholder.output_target"))
+        self.pages_field.setPlaceholderText(self._tr("placeholder.pages"))
+        self.manual_title_field.setPlaceholderText(self._tr("placeholder.manual_title"))
+        self.extra_prompt_edit.setPlaceholderText(self._tr("placeholder.extra_prompt"))
+        self.image_dpi_max_spin_box.setSpecialValueText(self._tr("special.default_dpi"))
+        self.timeout_spin_box.setSpecialValueText(self._tr("special.no_timeout"))
+
+        self.pdf_input_browse_button.setToolTip(self._tr("dialog.pdf_file.title"))
+        self.output_browse_button.setToolTip(self._tr("field.output_target"))
+        self.cache_browse_button.setToolTip(self._tr("dialog.cache_directory.title"))
+        self.confirm_overwrite_checkbox.setText(self._tr("checkbox.confirm_overwrite"))
+        self.show_date_checkbox.setText(self._tr("checkbox.show_date"))
+        self.beamer_title_page_checkbox.setText(self._tr("checkbox.beamer_title_page"))
+        self.cache_enabled_checkbox.setText(self._tr("checkbox.cache_enabled"))
+        self.clear_cache_checkbox.setText(self._tr("checkbox.clear_cache"))
+
+        self._set_combo_items(self.input_type_combo, _INPUT_KIND_ITEMS)
+        self._set_combo_items(self.output_kind_combo, _OUTPUT_KIND_ITEMS)
+        self._set_combo_items(self.api_key_source_combo, _API_KEY_SOURCE_ITEMS)
+        self._sync_api_key_controls()
+
+        for status, metric in self._metric_pills.items():
+            metric.set_label(self._tr(f"task.metric.{status.value}"))
+        empty_title = self.findChild(QLabel, "taskEmptyTitleLabel")
+        if empty_title is not None:
+            empty_title.setText(self._tr("task.empty.title"))
+        self._refresh_task_summary()
+
     def _browse_pdf_input(self) -> None:
         kind = self._current_input_kind()
         if kind == GuiInputKind.single_file:
             path, _selected_filter = QFileDialog.getOpenFileName(
                 self,
-                "选择 PDF 文件",
+                self._tr("dialog.pdf_file.title"),
                 self._input_dialog_directory(),
-                "PDF 文件 (*.pdf)",
+                self._tr("dialog.filter.pdf"),
             )
             if path:
                 self.set_input_selection(GuiInputSelection.from_single_file(path))
@@ -688,9 +901,9 @@ class ConversionMainPanel(QWidget):
         if kind == GuiInputKind.multiple_files:
             paths, _selected_filter = QFileDialog.getOpenFileNames(
                 self,
-                "选择多个 PDF 文件",
+                self._tr("dialog.pdf_files.title"),
                 self._input_dialog_directory(),
-                "PDF 文件 (*.pdf)",
+                self._tr("dialog.filter.pdf"),
             )
             if paths:
                 self.set_input_selection(GuiInputSelection.from_multiple_files(paths))
@@ -698,7 +911,7 @@ class ConversionMainPanel(QWidget):
 
         directory = QFileDialog.getExistingDirectory(
             self,
-            "选择 PDF 目录",
+            self._tr("dialog.pdf_directory.title"),
             self._input_dialog_directory(),
         )
         if directory:
@@ -708,9 +921,9 @@ class ConversionMainPanel(QWidget):
         if self._current_input_kind() == GuiInputKind.single_file and self._current_output_kind() == GuiOutputKind.tex_file:
             path, _selected_filter = QFileDialog.getSaveFileName(
                 self,
-                "选择输出 .tex 文件",
+                self._tr("dialog.output_tex.title"),
                 self._output_tex_dialog_path(),
-                "LaTeX 文件 (*.tex)",
+                self._tr("dialog.filter.tex"),
             )
             if path:
                 self.set_output_directory(path)
@@ -718,7 +931,7 @@ class ConversionMainPanel(QWidget):
 
         directory = QFileDialog.getExistingDirectory(
             self,
-            "选择输出目录",
+            self._tr("dialog.output_directory.title"),
             self._output_dialog_directory(),
         )
         if directory:
@@ -727,7 +940,7 @@ class ConversionMainPanel(QWidget):
     def _browse_cache_directory(self) -> None:
         directory = QFileDialog.getExistingDirectory(
             self,
-            "选择缓存目录",
+            self._tr("dialog.cache_directory.title"),
             self._cache_dialog_directory(),
         )
         if directory:
@@ -767,7 +980,7 @@ class ConversionMainPanel(QWidget):
         return self.path_memory
 
     def _refresh_path_state(self) -> None:
-        self.pdf_input_field.setText(self.selection_state.input_selection.display_text())
+        self.pdf_input_field.setText(self.selection_state.input_selection.display_text(self._language))
         self.output_directory_field.setText(self.selection_state.output_directory)
         self._refresh_mode_controls()
         self._refresh_action_state()
@@ -776,16 +989,16 @@ class ConversionMainPanel(QWidget):
     def _status_message(self) -> str:
         has_input = self.selection_state.input_selection.is_valid
         has_output = bool(self.selection_state.output_directory)
-        errors = validate_gui_settings(self.current_settings())
+        errors = validate_gui_settings(self.current_settings(), language=self._language)
         if errors:
             return errors[0]
         if has_input and has_output:
-            return "已选择 PDF 输入和产物目录"
+            return self._tr("status.paths.ready")
         if has_input:
-            return "已选择 PDF 输入，请选择产物目录"
+            return self._tr("status.paths.need_output")
         if has_output:
-            return "已选择产物目录，请选择 PDF 输入"
-        return "请选择 PDF 输入和产物目录"
+            return self._tr("status.paths.need_input")
+        return self._tr("status.paths.empty")
 
     def _publish_status_message(self, message: str) -> None:
         window = self.window()
@@ -829,23 +1042,19 @@ class ConversionMainPanel(QWidget):
         return path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].rsplit(".", 1)[0]
 
     def _current_input_kind(self) -> GuiInputKind:
-        return input_kind_from_label(self.input_type_combo.currentText())
+        return GuiInputKind(self._combo_value(self.input_type_combo))
 
     def _current_conversion_mode(self) -> GuiConversionMode:
         return self._current_output_kind()
 
     def _current_output_kind(self) -> GuiOutputKind:
-        if self.output_kind_combo.currentText() == "目录化项目":
-            return GuiOutputKind.project
-        return GuiOutputKind.tex_file
+        return GuiOutputKind(self._combo_value(self.output_kind_combo))
 
     def _current_api_key_source(self) -> GuiApiKeySource:
-        if self.api_key_source_combo.currentText() == "环境变量名":
-            return GuiApiKeySource.environment
-        return GuiApiKeySource.direct
+        return GuiApiKeySource(self._combo_value(self.api_key_source_combo))
 
     def _set_conversion_mode(self, mode: GuiConversionMode) -> None:
-        self.output_kind_combo.setCurrentText("目录化项目" if mode == GuiOutputKind.project else "单个 .tex")
+        self._set_combo_value(self.output_kind_combo, mode.value)
         self._sync_gui_state()
 
     def _refresh_mode_controls(self) -> None:
@@ -874,9 +1083,9 @@ class ConversionMainPanel(QWidget):
 
     def _sync_api_key_controls(self) -> None:
         if self._current_api_key_source() == GuiApiKeySource.environment:
-            self.api_key_field.setPlaceholderText("环境变量名，如 TEXBOOK_API_KEY")
+            self.api_key_field.setPlaceholderText(self._tr("placeholder.api_key_env"))
         else:
-            self.api_key_field.setPlaceholderText("直接输入 API Key")
+            self.api_key_field.setPlaceholderText(self._tr("placeholder.api_key_direct"))
         self.api_key_field.setEchoMode(QLineEdit.EchoMode.Password)
         self._sync_gui_state()
 
@@ -888,14 +1097,16 @@ class ConversionMainPanel(QWidget):
         settings = self.current_settings()
         is_running = self._executor is not None
         self.add_task_button.setEnabled(
-            not is_running and self.selection_state.can_add_task and not validate_gui_settings(settings)
+            not is_running
+            and self.selection_state.can_add_task
+            and not validate_gui_settings(settings, language=self._language)
         )
         self.start_button.setEnabled(
             not is_running
             and any(state.status == GuiTaskStatus.pending for state in self._task_states.values())
         )
         single_input = self._current_input_kind() == GuiInputKind.single_file
-        self.manual_title_field.setEnabled(single_input and self.title_source_combo.currentText() != "llm")
+        self.manual_title_field.setEnabled(single_input and self._combo_value(self.title_source_combo) != "llm")
         self.show_date_checkbox.setEnabled(True)
         self.beamer_title_page_checkbox.setEnabled(self.document_class_combo.currentText() in {"beamer", "ctexbeamer"})
 
@@ -952,7 +1163,8 @@ class ConversionMainPanel(QWidget):
 
     def set_settings(self, settings: GuiConversionSettings) -> None:
         self.selection_state = settings.path_state
-        self.output_kind_combo.setCurrentText("目录化项目" if settings.output_kind == GuiOutputKind.project else "单个 .tex")
+        self._set_combo_value(self.input_type_combo, settings.path_state.input_selection.kind.value)
+        self._set_combo_value(self.output_kind_combo, settings.output_kind.value)
         self.confirm_overwrite_checkbox.setChecked(settings.confirm_overwrite)
         self.batch_pattern_field.setText(settings.batch_pattern)
         self.pages_field.setText(settings.pages)
@@ -967,11 +1179,7 @@ class ConversionMainPanel(QWidget):
         self.model_field.setText(settings.model)
         self.base_url_field.setText(settings.base_url)
         self.api_key_field.setText(settings.api_key)
-        self.api_key_source_combo.setCurrentText(
-            "环境变量名"
-            if settings.api_key_source == GuiApiKeySource.environment
-            else "直接输入"
-        )
+        self._set_combo_value(self.api_key_source_combo, settings.api_key_source.value)
         self.prompt_preset_combo.setCurrentText(settings.prompt_preset)
         self.extra_prompt_edit.setPlainText(settings.extra_prompt)
         self.temperature_spin_box.setValue(settings.temperature)
@@ -1004,15 +1212,18 @@ class ConversionMainPanel(QWidget):
         self.set_settings(GuiConversionSettings())
 
     def validate_settings(self) -> list[str]:
-        return validate_gui_settings(self.current_settings())
+        return validate_gui_settings(self.current_settings(), language=self._language)
 
     def add_current_tasks(self) -> None:
         """Create pending in-memory tasks from current settings."""
         if self._executor is not None:
-            self._publish_status_message("转换运行中，暂不能添加新任务。")
+            self._publish_status_message(self._tr("status.running_cannot_add"))
             return
         try:
-            new_tasks = create_conversion_tasks(self.current_settings())
+            new_tasks = create_conversion_tasks(
+                self.current_settings(),
+                language=self._language,
+            )
         except GuiTaskCreationError as exc:
             self._publish_status_message(str(exc))
             return
@@ -1020,12 +1231,12 @@ class ConversionMainPanel(QWidget):
         for task in new_tasks:
             self._task_states[task.task_id] = create_task_view_state(task)
         self._refresh_task_summary()
-        self._publish_status_message(f"已添加 {len(new_tasks)} 个待处理任务")
+        self._publish_status_message(self._tr("status.tasks_added", count=len(new_tasks)))
 
     def start_pending_tasks(self) -> None:
         """Start background execution for all pending tasks."""
         if self._executor is not None:
-            self._publish_status_message("转换正在运行。")
+            self._publish_status_message(self._tr("status.already_running"))
             return
         pending_tasks = [
             task
@@ -1034,7 +1245,7 @@ class ConversionMainPanel(QWidget):
             and self._task_states[task.task_id].status == GuiTaskStatus.pending
         ]
         if not pending_tasks:
-            self._publish_status_message("没有待处理任务。")
+            self._publish_status_message(self._tr("status.no_pending_tasks"))
             self._refresh_action_state()
             return
 
@@ -1049,7 +1260,7 @@ class ConversionMainPanel(QWidget):
         executor.task_canceled.connect(self._handle_executor_task_canceled)
         executor.overwrite_confirmation_requested.connect(self._handle_overwrite_confirmation_requested)
         executor.all_finished.connect(self._handle_executor_finished)
-        self._publish_status_message(f"开始执行 {len(pending_tasks)} 个任务")
+        self._publish_status_message(self._tr("status.starting_tasks", count=len(pending_tasks)))
         self._refresh_action_state()
         executor.start()
 
@@ -1057,21 +1268,21 @@ class ConversionMainPanel(QWidget):
         """Cancel one pending or running task."""
         state = self._task_states.get(task_id)
         if state is None:
-            raise ValueError(f"未知任务：{task_id}")
+            raise ValueError(self._tr("status.unknown_task", task_id=task_id))
         if state.status in TERMINAL_TASK_STATUSES:
             return
         if state.status == GuiTaskStatus.pending:
             if self._executor is not None:
                 self._executor.cancel_task(task_id)
-            mark_task_canceled(state)
+            mark_task_canceled(state, language=self._language)
             self._refresh_task_summary()
-            self._publish_status_message("已取消待处理任务")
+            self._publish_status_message(self._tr("status.pending_canceled"))
             return
-        mark_task_canceling(state)
+        mark_task_canceling(state, language=self._language)
         if self._executor is not None:
             self._executor.cancel_task(task_id)
         self._refresh_task_summary()
-        self._publish_status_message("正在取消任务")
+        self._publish_status_message(self._tr("status.canceling"))
 
     def task_view_states(self) -> tuple[GuiTaskViewState, ...]:
         """Return current task display states in queue order."""
@@ -1085,7 +1296,7 @@ class ConversionMainPanel(QWidget):
         """Apply a display update to one queued task."""
         state = self._task_states.get(task_id)
         if state is None:
-            raise ValueError(f"未知任务：{task_id}")
+            raise ValueError(self._tr("status.unknown_task", task_id=task_id))
         apply_task_update(state, update)
         self._refresh_task_summary()
 
@@ -1093,17 +1304,17 @@ class ConversionMainPanel(QWidget):
         """Merge one core progress event into one queued task."""
         state = self._task_states.get(task_id)
         if state is None:
-            raise ValueError(f"未知任务：{task_id}")
-        apply_progress_event(state, event)
+            raise ValueError(self._tr("status.unknown_task", task_id=task_id))
+        apply_progress_event(state, event, language=self._language)
         self._refresh_task_summary()
 
     def _handle_executor_task_started(self, task_id: str) -> None:
         state = self._task_states.get(task_id)
         if state is None or state.status == GuiTaskStatus.canceled:
             return
-        mark_task_running(state)
+        mark_task_running(state, language=self._language)
         self._refresh_task_summary()
-        self._publish_status_message(f"正在转换：{state.label}")
+        self._publish_status_message(self._tr("status.converting", label=state.label))
 
     def _handle_executor_task_progress(self, task_id: str, event: object) -> None:
         if isinstance(event, ProgressEvent):
@@ -1114,9 +1325,14 @@ class ConversionMainPanel(QWidget):
         if state is None:
             return
         resolved_notes = tuple(notes) if isinstance(notes, tuple) else ()
-        mark_task_completed(state, result=result, notes=resolved_notes)
+        mark_task_completed(
+            state,
+            result=result,
+            notes=resolved_notes,
+            language=self._language,
+        )
         self._refresh_task_summary()
-        self._publish_status_message(f"转换完成：{state.label}")
+        self._publish_status_message(self._tr("status.completed", label=state.label))
 
     def _handle_executor_task_failed(self, task_id: str, error: str) -> None:
         state = self._task_states.get(task_id)
@@ -1124,38 +1340,44 @@ class ConversionMainPanel(QWidget):
             return
         mark_task_failed(state, error)
         self._refresh_task_summary()
-        self._publish_status_message(f"转换失败：{state.label}")
+        self._publish_status_message(self._tr("status.failed", label=state.label))
 
     def _handle_executor_task_canceling(self, task_id: str) -> None:
         state = self._task_states.get(task_id)
         if state is None:
             return
-        mark_task_canceling(state)
+        mark_task_canceling(state, language=self._language)
         self._refresh_task_summary()
 
     def _handle_executor_task_canceled(self, task_id: str) -> None:
         state = self._task_states.get(task_id)
         if state is None:
             return
-        mark_task_canceled(state)
+        mark_task_canceled(state, language=self._language)
         self._refresh_task_summary()
-        self._publish_status_message(f"已取消：{state.label}")
+        self._publish_status_message(self._tr("status.canceled", label=state.label))
 
     def _handle_overwrite_confirmation_requested(self, request: object) -> None:
         if not isinstance(request, GuiOverwriteConfirmationRequest):
             return
         message = QMessageBox(self)
         message.setIcon(QMessageBox.Icon.Warning)
-        message.setWindowTitle("确认覆盖")
-        task_label = request.task_label or request.task_id or "当前任务"
+        message.setWindowTitle(self._tr("dialog.overwrite.title"))
+        task_label = request.task_label or request.task_id or self._tr("dialog.overwrite.task_fallback")
         message.setText(f"{request.summary}：{task_label}")
-        message.setInformativeText(f"{request.details}\n\n目标：{request.target}")
+        message.setInformativeText(
+            self._tr(
+                "dialog.overwrite.informative",
+                details=request.details,
+                target=request.target,
+            )
+        )
         message.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         message.setDefaultButton(QMessageBox.StandardButton.No)
-        message.button(QMessageBox.StandardButton.Yes).setText("覆盖")
-        message.button(QMessageBox.StandardButton.No).setText("取消")
+        message.button(QMessageBox.StandardButton.Yes).setText(self._tr("dialog.overwrite.yes"))
+        message.button(QMessageBox.StandardButton.No).setText(self._tr("dialog.overwrite.no"))
         approved = message.exec() == QMessageBox.StandardButton.Yes
         request.resolve(approved)
 
@@ -1164,7 +1386,7 @@ class ConversionMainPanel(QWidget):
             self._executor.deleteLater()
             self._executor = None
         self._refresh_task_summary()
-        self._publish_status_message("后台转换已结束")
+        self._publish_status_message(self._tr("status.finished"))
 
     def _refresh_task_summary(self) -> None:
         counts = {status: 0 for status in GuiTaskStatus}
@@ -1176,7 +1398,11 @@ class ConversionMainPanel(QWidget):
         empty_status = self.findChild(QLabel, "taskEmptyStatusLabel")
         if empty_status is not None:
             total = len(states)
-            empty_status.setText("队列空闲" if total == 0 else f"已创建 {total} 个任务")
+            empty_status.setText(
+                self._tr("task.empty.status")
+                if total == 0
+                else self._tr("task.empty.created", count=total)
+            )
         self._refresh_task_rows(states)
         self._refresh_overall_progress(states)
         self._refresh_action_state()
@@ -1228,7 +1454,7 @@ class ConversionMainPanel(QWidget):
         cancel = self._make_icon_button(
             f"taskCancelButton_{state.task_id}",
             QStyle.StandardPixmap.SP_DialogCancelButton,
-            "取消任务",
+            self._tr("task.cancel.tooltip"),
         )
         cancel.clicked.connect(lambda _checked=False, task_id=state.task_id: self.cancel_task(task_id))
         header.addWidget(cancel)
@@ -1277,7 +1503,7 @@ class ConversionMainPanel(QWidget):
     def _update_task_row(self, row: QFrame, state: GuiTaskViewState) -> None:
         status = row.findChild(QLabel, f"taskStatusBadge_{state.task_id}")
         if status is not None:
-            status.setText(state.status_label)
+            status.setText(task_status_label(state.status, self._language))
             status.setProperty("taskStatus", state.status.value)
             status.style().unpolish(status)
             status.style().polish(status)
@@ -1294,9 +1520,13 @@ class ConversionMainPanel(QWidget):
 
         stage = row.findChild(QLabel, f"taskStageLabel_{state.task_id}")
         if stage is not None:
-            detail = f"阶段：{state.stage_label}"
-            if state.recent_event:
-                detail = f"{detail} · {state.recent_event}"
+            detail = self._tr(
+                "task.stage.prefix",
+                stage=task_stage_label(state.stage, self._language),
+            )
+            recent_event = task_recent_event_text(state, self._language)
+            if recent_event:
+                detail = f"{detail} · {recent_event}"
             stage.setText(detail)
 
         progress = row.findChild(QProgressBar, f"taskProgressBar_{state.task_id}")
@@ -1306,11 +1536,11 @@ class ConversionMainPanel(QWidget):
 
         cache = row.findChild(QLabel, f"taskCacheLabel_{state.task_id}")
         if cache is not None:
-            cache.setText(f"缓存命中 {state.cache_hits}")
+            cache.setText(self._tr("task.cache_hits", count=state.cache_hits))
 
         retry = row.findChild(QLabel, f"taskRetryLabel_{state.task_id}")
         if retry is not None:
-            retry.setText(f"重试 {state.retries}")
+            retry.setText(self._tr("task.retries", count=state.retries))
 
         result = row.findChild(QLabel, f"taskResultLabel_{state.task_id}")
         if result is not None:
@@ -1324,19 +1554,29 @@ class ConversionMainPanel(QWidget):
         self.overall_progress_bar.setValue(max(0, min(100, average)))
 
     def _task_target_text(self, state: GuiTaskViewState) -> str:
-        kind = "目录化项目" if state.task.output_target.kind == GuiOutputKind.project else "LaTeX 文件"
-        return f"{kind}：{state.task.output_target.path}"
+        key = (
+            "task.target.project"
+            if state.task.output_target.kind == GuiOutputKind.project
+            else "task.target.tex_file"
+        )
+        return self._tr(key, path=state.task.output_target.path)
 
     def _task_result_text(self, state: GuiTaskViewState) -> str:
         if state.status == GuiTaskStatus.failed:
-            return f"失败原因：{state.error or '未知错误'}"
+            return self._tr(
+                "task.result.failed",
+                error=state.error or self._tr("task.result.unknown_error"),
+            )
         if state.status == GuiTaskStatus.canceled:
-            return "任务已取消"
+            return self._tr("task.result.canceled")
         if state.status == GuiTaskStatus.completed:
-            return f"完成结果：{state.result or state.task.output_target.path}"
+            return self._tr(
+                "task.result.completed",
+                result=state.result or state.task.output_target.path,
+            )
         if state.notes:
             return "；".join(state.notes)
-        return "等待后台执行"
+        return self._tr("task.result.waiting")
 
     def close_executor(self) -> None:
         """Request executor shutdown when the owning window is closing."""

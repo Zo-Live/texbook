@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import PureWindowsPath
 
+from texbook.gui.display import GuiLanguage
+from texbook.gui.i18n import tr
+
 
 class GuiInputKind(str, Enum):
     """PDF input kinds exposed by the GUI input selector."""
@@ -51,14 +54,14 @@ class GuiInputSelection:
     def is_valid(self) -> bool:
         return bool(self.paths)
 
-    def display_text(self) -> str:
+    def display_text(self, language: GuiLanguage | str = GuiLanguage.zh_CN) -> str:
         if not self.paths:
             return ""
         if self.kind == GuiInputKind.multiple_files:
             count = len(self.paths)
             if count == 1:
                 return self.paths[0]
-            return f"{self.paths[0]} 等 {count} 个文件"
+            return tr(language, "selection.multiple_files", first=self.paths[0], count=count)
         return self.paths[0]
 
 
@@ -75,11 +78,20 @@ class GuiPathSelectionState:
 
 
 def input_kind_from_label(label: str) -> GuiInputKind:
-    """Resolve the Chinese combo-box label to a stable input kind."""
+    """Resolve a combo-box label to a stable input kind."""
     for kind, kind_label in INPUT_KIND_LABELS.items():
         if label == kind_label:
             return kind
-    raise ValueError(f"未知输入类型：{label}")
+    for language in GuiLanguage:
+        localized_labels = {
+            GuiInputKind.single_file: tr(language, "option.input.single_file"),
+            GuiInputKind.multiple_files: tr(language, "option.input.multiple_files"),
+            GuiInputKind.directory: tr(language, "option.input.directory"),
+        }
+        for kind, kind_label in localized_labels.items():
+            if label == kind_label:
+                return kind
+    raise ValueError(tr(GuiLanguage.zh_CN, "error.unknown_input_type", label=label))
 
 
 def _is_pdf_path(path: str) -> bool:

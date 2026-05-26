@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 
+from texbook.gui.display import GuiLanguage
+from texbook.gui.i18n import tr
 from texbook.gui.selection import GuiPathSelectionState
 
 
@@ -86,14 +88,18 @@ class GuiConversionSettings:
         object.__setattr__(self, "api_key_source", api_key_source)
 
 
-def validate_gui_settings(settings: GuiConversionSettings) -> list[str]:
-    """Return Chinese validation errors for GUI settings."""
+def validate_gui_settings(
+    settings: GuiConversionSettings,
+    *,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
+) -> list[str]:
+    """Return localized validation errors for GUI settings."""
     errors: list[str] = []
 
     if settings.output_kind not in {item.value for item in GuiOutputKind}:
-        errors.append("输出形式无效。")
+        errors.append(tr(language, "error.invalid_output_kind"))
     if not settings.batch_pattern.strip():
-        errors.append("目录批量匹配模式不能为空。")
+        errors.append(tr(language, "error.empty_batch_pattern"))
     if settings.document_class not in {
         "auto",
         "article",
@@ -103,66 +109,66 @@ def validate_gui_settings(settings: GuiConversionSettings) -> list[str]:
         "ctexbook",
         "ctexbeamer",
     }:
-        errors.append("文档类无效。")
+        errors.append(tr(language, "error.invalid_document_class"))
     if settings.structure_mode not in {"auto", "off", "local", "llm"}:
-        errors.append("结构规划模式无效。")
+        errors.append(tr(language, "error.invalid_structure_mode"))
     if settings.title_source not in {"filename", "llm"}:
-        errors.append("标题来源无效。")
+        errors.append(tr(language, "error.invalid_title_source"))
     api_key_source_value = (
         settings.api_key_source.value
         if isinstance(settings.api_key_source, GuiApiKeySource)
         else str(settings.api_key_source)
     )
     if api_key_source_value not in {item.value for item in GuiApiKeySource}:
-        errors.append("API Key 来源无效。")
+        errors.append(tr(language, "error.invalid_api_key_source"))
     if api_key_source_value == GuiApiKeySource.environment.value:
         env_name = settings.api_key.strip()
         if env_name and env_name not in os.environ:
-            errors.append(f"API Key 环境变量不存在：{env_name}。")
+            errors.append(tr(language, "error.missing_api_key_env", env_name=env_name))
     if settings.image_format not in {"auto", "png", "jpeg"}:
-        errors.append("图像格式无效。")
+        errors.append(tr(language, "error.invalid_image_format"))
     if settings.beamer_box_style not in {"block", "tcolorbox"}:
-        errors.append("Beamer 块样式无效。")
+        errors.append(tr(language, "error.invalid_beamer_box_style"))
     if settings.ctex_font_profile not in {"default", "local"}:
-        errors.append("CTeX 字体配置无效。")
+        errors.append(tr(language, "error.invalid_ctex_font_profile"))
     if parse_gui_pages(settings.pages) is None and settings.pages.strip():
-        errors.append("页面范围格式无效，请使用 1,3-5 这样的 1-based 页码。")
+        errors.append(tr(language, "error.invalid_pages"))
     if settings.manual_title.strip() and settings.title_source == "llm":
-        errors.append("手动标题不能与 LLM 标题来源同时使用。")
+        errors.append(tr(language, "error.manual_title_with_llm"))
     if settings.image_dpi_min <= 0:
-        errors.append("图片 DPI 下限必须为正数。")
+        errors.append(tr(language, "error.image_dpi_min_positive"))
     if settings.image_dpi_max is not None and settings.image_dpi_max <= 0:
-        errors.append("图片 DPI 上限必须为正数。")
+        errors.append(tr(language, "error.image_dpi_max_positive"))
     if settings.image_dpi_max is not None and settings.image_dpi_min > settings.image_dpi_max:
-        errors.append("图片 DPI 下限不能大于上限。")
+        errors.append(tr(language, "error.image_dpi_range"))
     if not 1 <= settings.jpeg_quality <= 100:
-        errors.append("JPEG 质量必须在 1 到 100 之间。")
+        errors.append(tr(language, "error.jpeg_quality_range"))
     if settings.timeout_seconds is not None and settings.timeout_seconds <= 0:
-        errors.append("LLM 超时时间必须为正数，或留空表示不限制。")
+        errors.append(tr(language, "error.timeout_positive"))
     if settings.llm_retry_max_delay < settings.llm_retry_initial_delay:
-        errors.append("最大重试延迟不能小于初始重试延迟。")
+        errors.append(tr(language, "error.retry_delay_order"))
     if settings.chunk_pages <= 0:
-        errors.append("Chunk 页数必须为正数。")
+        errors.append(tr(language, "error.chunk_pages_positive"))
     if settings.structure_chunk_pages <= 0:
-        errors.append("结构规划 Chunk 页数必须为正数。")
+        errors.append(tr(language, "error.structure_chunk_pages_positive"))
     if settings.structure_max_pages <= 0:
-        errors.append("结构规划最大页数必须为正数。")
+        errors.append(tr(language, "error.structure_max_pages_positive"))
     if settings.max_tokens <= 0:
-        errors.append("Max tokens 必须为正数。")
+        errors.append(tr(language, "error.max_tokens_positive"))
     if settings.prefetch_chunks < 0:
-        errors.append("预渲染 Chunk 数不能为负数。")
+        errors.append(tr(language, "error.prefetch_non_negative"))
     if settings.llm_retries < 0:
-        errors.append("LLM 重试次数不能为负数。")
+        errors.append(tr(language, "error.llm_retries_non_negative"))
     if settings.llm_max_concurrency <= 0:
-        errors.append("LLM 并发数必须为正数。")
+        errors.append(tr(language, "error.llm_concurrency_positive"))
     if settings.llm_min_request_interval < 0:
-        errors.append("请求间隔不能为负数。")
+        errors.append(tr(language, "error.request_interval_non_negative"))
     if settings.batch_workers <= 0:
-        errors.append("批量 Worker 必须为正数。")
+        errors.append(tr(language, "error.batch_workers_positive"))
     if settings.clear_cache and not settings.cache_enabled:
-        errors.append("禁用缓存时不能清理缓存。")
+        errors.append(tr(language, "error.clear_cache_requires_cache"))
     if settings.temperature < 0:
-        errors.append("Temperature 不能为负数。")
+        errors.append(tr(language, "error.temperature_non_negative"))
 
     return errors
 

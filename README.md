@@ -193,7 +193,7 @@ uv run texbook-gui
 uv run python -m texbook.gui
 ```
 
-GUI 使用 `docs/icon.ico` 作为应用图标。基础 Windows 打包入口使用 PyInstaller：
+GUI 使用 `docs/icon.ico` 作为应用图标，支持亮色模式、暗色模式和中文/English 界面切换，并会记忆这些显示偏好。基础 Windows 打包入口使用 PyInstaller：
 
 ```bash
 uv run pyinstaller packaging/texbook-gui.spec

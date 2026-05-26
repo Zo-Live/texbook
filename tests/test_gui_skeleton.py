@@ -31,6 +31,7 @@ from texbook.convert import LatexProjectResult  # noqa: E402
 from texbook.document_class import DocumentClassMode  # noqa: E402
 from texbook.gui.app import create_application  # noqa: E402
 from texbook.gui.core_adapter import build_core_conversion_bundle  # noqa: E402
+from texbook.gui.display import GuiDisplayPreferences, GuiLanguage, GuiThemeMode  # noqa: E402
 from texbook.gui.executor import (  # noqa: E402
     GuiCancellationToken,
     GuiOverwriteConfirmationRequest,
@@ -542,6 +543,94 @@ def test_conversion_panel_option_dependencies_follow_mode_cache_and_image_format
     app.quit()
 
 
+def test_conversion_panel_theme_and_language_switch_keep_stable_values():
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+
+    panel.findChild(QComboBox, "inputTypeCombo").setCurrentText("目录批量")
+    panel.findChild(QComboBox, "outputKindCombo").setCurrentText("目录化项目")
+    panel.findChild(QComboBox, "apiKeySourceCombo").setCurrentText("环境变量名")
+    assert panel.current_settings().output_kind == GuiOutputKind.project
+    assert panel.current_settings().api_key_source == GuiApiKeySource.environment
+
+    panel.findChild(QToolButton, "themeButton").click()
+
+    assert panel.current_display_preferences().theme == GuiThemeMode.dark
+    assert "#17191d" in window.styleSheet()
+    assert panel.findChild(QToolButton, "themeButton").text() == "暗色"
+
+    panel.findChild(QToolButton, "languageButton").click()
+
+    assert panel.current_display_preferences().language == GuiLanguage.en_US
+    assert window.windowTitle() == "TexBook PDF to LaTeX"
+    assert panel.findChild(QPushButton, "addTaskButton").text() == "Add Task"
+    assert panel.findChild(QComboBox, "inputTypeCombo").currentText() == "Folder Batch"
+    assert panel.findChild(QComboBox, "inputTypeCombo").currentData() == GuiInputKind.directory.value
+    assert panel.findChild(QComboBox, "outputKindCombo").currentText() == "Project Folder"
+    assert panel.current_settings().output_kind == GuiOutputKind.project
+    assert panel.findChild(QComboBox, "apiKeySourceCombo").currentText() == "Environment variable"
+    assert panel.current_settings().api_key_source == GuiApiKeySource.environment
+    assert window.statusBar().currentMessage() == "Select PDF input and output target"
+
+    window.close()
+    app.quit()
+
+
+def test_conversion_panel_english_validation_and_task_text(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+    panel.findChild(QToolButton, "languageButton").click()
+
+    panel.findChild(QLineEdit, "pagesField").setText("5-3")
+
+    assert panel.validate_settings()[0].startswith("Invalid page range")
+    assert window.statusBar().currentMessage().startswith("Invalid page range")
+
+    panel.findChild(QLineEdit, "pagesField").setText("")
+    panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
+    panel.set_output_directory("out")
+    panel.findChild(QPushButton, "addTaskButton").click()
+    states = panel.task_view_states()
+
+    assert panel.findChild(QLabel, f"taskStatusBadge_{states[0].task_id}").text() == "Pending"
+    assert panel.findChild(QLabel, f"taskStageLabel_{states[0].task_id}").text() == "Stage: Waiting"
+    assert panel.findChild(QLabel, f"taskCacheLabel_{states[0].task_id}").text() == "Cache hits 0"
+    assert panel.findChild(QLabel, "taskEmptyStatusLabel").text() == "2 task(s) created"
+
+    first_id = states[0].task_id
+    panel.handle_task_progress(
+        first_id,
+        ProgressEvent(kind="cache_hit", operation="chunk", label="chunk 1/2"),
+    )
+
+    assert "Cache hit: chunk 1/2" in panel.findChild(
+        QLabel,
+        f"taskStageLabel_{first_id}",
+    ).text()
+
+    panel.update_task_state(
+        first_id,
+        GuiTaskRuntimeUpdate(
+            status=GuiTaskStatus.completed,
+            stage=GuiTaskStage.completed,
+            progress=100,
+            result="out/a.tex",
+        ),
+    )
+
+    assert panel.findChild(QLabel, f"taskStatusBadge_{first_id}").text() == "Completed"
+    assert panel.findChild(QLabel, f"taskResultLabel_{first_id}").text() == "Result: out/a.tex"
+
+    window.close()
+    app.quit()
+
+
 def test_conversion_panel_cache_directory_browse_updates_settings(monkeypatch):
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
@@ -629,6 +718,32 @@ def test_gui_settings_store_round_trips_persistent_settings(tmp_path):
     assert loaded.path_memory.last_input_directory == r"C:\books"
     assert loaded.path_memory.last_output_directory == r"D:\tex-output"
     assert loaded.path_memory.last_cache_directory == r"D:\tex-cache"
+
+
+def test_gui_settings_store_round_trips_display_preferences(tmp_path):
+    store = _gui_settings_store(tmp_path)
+    state = GuiPersistentState(
+        settings=GuiConversionSettings(),
+        path_memory=GuiPathMemory(),
+        display_preferences=GuiDisplayPreferences(
+            theme=GuiThemeMode.dark,
+            language=GuiLanguage.en_US,
+        ),
+    )
+
+    store.save_state(state)
+    loaded = store.load_state()
+
+    assert loaded.display_preferences.theme == GuiThemeMode.dark
+    assert loaded.display_preferences.language == GuiLanguage.en_US
+
+    raw = store._settings
+    raw.setValue("display/theme", "invalid")
+    raw.setValue("display/language", "invalid")
+
+    loaded = store.load_state()
+
+    assert loaded.display_preferences == GuiDisplayPreferences()
 
 
 def test_gui_settings_store_falls_back_from_invalid_values(tmp_path):
@@ -875,6 +990,41 @@ def test_main_window_restores_and_saves_persistent_gui_state(tmp_path):
     assert loaded.settings.path_state == GuiPathSelectionState()
     assert loaded.path_memory.last_input_directory == r"C:\books"
     assert loaded.path_memory.last_output_directory == r"D:\tex-output"
+
+    app.quit()
+
+
+def test_main_window_restores_and_saves_display_preferences(tmp_path):
+    store = _gui_settings_store(tmp_path)
+    store.save_state(
+        GuiPersistentState(
+            settings=GuiConversionSettings(),
+            path_memory=GuiPathMemory(),
+            display_preferences=GuiDisplayPreferences(
+                theme=GuiThemeMode.dark,
+                language=GuiLanguage.en_US,
+            ),
+        )
+    )
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow(settings_store=store)
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+
+    assert window.windowTitle() == "TexBook PDF to LaTeX"
+    assert panel.current_display_preferences().theme == GuiThemeMode.dark
+    assert panel.current_display_preferences().language == GuiLanguage.en_US
+    assert panel.findChild(QPushButton, "addTaskButton").text() == "Add Task"
+    assert "#17191d" in window.styleSheet()
+
+    panel.findChild(QToolButton, "themeButton").click()
+    panel.findChild(QToolButton, "languageButton").click()
+    window.close()
+
+    loaded = store.load_state()
+
+    assert loaded.display_preferences.theme == GuiThemeMode.light
+    assert loaded.display_preferences.language == GuiLanguage.zh_CN
 
     app.quit()
 

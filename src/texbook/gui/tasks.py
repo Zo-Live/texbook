@@ -9,6 +9,8 @@ from pathlib import Path, PureWindowsPath
 from uuid import uuid4
 
 from texbook.gui.core_adapter import GuiCoreConversionBundle, build_core_conversion_bundle
+from texbook.gui.display import GuiLanguage
+from texbook.gui.i18n import tr
 from texbook.gui.selection import GuiInputKind
 from texbook.gui.settings import GuiConversionSettings, GuiOutputKind
 from texbook.llm.scheduler import ProgressEvent
@@ -40,26 +42,34 @@ class GuiTaskStage(str, Enum):
     failed = "failed"
 
 
+TASK_STAGE_LABEL_KEYS = {
+    GuiTaskStage.waiting: "task.stage.waiting",
+    GuiTaskStage.extracting: "task.stage.extracting",
+    GuiTaskStage.document_class: "task.stage.document_class",
+    GuiTaskStage.structure: "task.stage.structure",
+    GuiTaskStage.chunk: "task.stage.chunk",
+    GuiTaskStage.title: "task.stage.title",
+    GuiTaskStage.finalizing: "task.stage.finalizing",
+    GuiTaskStage.canceled: "task.stage.canceled",
+    GuiTaskStage.completed: "task.stage.completed",
+    GuiTaskStage.failed: "task.stage.failed",
+}
+
+TASK_STATUS_LABEL_KEYS = {
+    GuiTaskStatus.pending: "task.status.pending",
+    GuiTaskStatus.running: "task.status.running",
+    GuiTaskStatus.canceling: "task.status.canceling",
+    GuiTaskStatus.canceled: "task.status.canceled",
+    GuiTaskStatus.completed: "task.status.completed",
+    GuiTaskStatus.failed: "task.status.failed",
+}
+
 TASK_STAGE_LABELS = {
-    GuiTaskStage.waiting: "等待中",
-    GuiTaskStage.extracting: "提取页面",
-    GuiTaskStage.document_class: "判断文档类",
-    GuiTaskStage.structure: "结构规划",
-    GuiTaskStage.chunk: "转换正文",
-    GuiTaskStage.title: "生成标题",
-    GuiTaskStage.finalizing: "收尾",
-    GuiTaskStage.canceled: "已取消",
-    GuiTaskStage.completed: "已完成",
-    GuiTaskStage.failed: "失败",
+    stage: tr(GuiLanguage.zh_CN, key) for stage, key in TASK_STAGE_LABEL_KEYS.items()
 }
 
 TASK_STATUS_LABELS = {
-    GuiTaskStatus.pending: "待处理",
-    GuiTaskStatus.running: "运行中",
-    GuiTaskStatus.canceling: "取消中",
-    GuiTaskStatus.canceled: "已取消",
-    GuiTaskStatus.completed: "完成",
-    GuiTaskStatus.failed: "失败",
+    status: tr(GuiLanguage.zh_CN, key) for status, key in TASK_STATUS_LABEL_KEYS.items()
 }
 
 TERMINAL_TASK_STATUSES = {
@@ -108,6 +118,8 @@ class GuiTaskRuntimeUpdate:
     result: str | None = None
     notes: tuple[str, ...] | None = None
     recent_event: str | None = None
+    recent_event_key: str | None = None
+    recent_event_args: dict[str, object] | None = None
 
 
 @dataclass
@@ -124,6 +136,8 @@ class GuiTaskViewState:
     result: str = ""
     notes: tuple[str, ...] = field(default_factory=tuple)
     recent_event: str = ""
+    recent_event_key: str = ""
+    recent_event_args: dict[str, object] = field(default_factory=dict)
 
     @property
     def task_id(self) -> str:
@@ -135,11 +149,37 @@ class GuiTaskViewState:
 
     @property
     def status_label(self) -> str:
-        return TASK_STATUS_LABELS[self.status]
+        return task_status_label(self.status)
 
     @property
     def stage_label(self) -> str:
-        return TASK_STAGE_LABELS[self.stage]
+        return task_stage_label(self.stage)
+
+
+def task_status_label(
+    status: GuiTaskStatus,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
+) -> str:
+    """Return a localized task status label."""
+    return tr(language, TASK_STATUS_LABEL_KEYS[status])
+
+
+def task_stage_label(
+    stage: GuiTaskStage,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
+) -> str:
+    """Return a localized task stage label."""
+    return tr(language, TASK_STAGE_LABEL_KEYS[stage])
+
+
+def task_recent_event_text(
+    state: GuiTaskViewState,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
+) -> str:
+    """Return the latest task event in the requested language when possible."""
+    if state.recent_event_key:
+        return tr(language, state.recent_event_key, **state.recent_event_args)
+    return state.recent_event
 
 
 def create_task_view_state(task: GuiConversionTask) -> GuiTaskViewState:
@@ -170,35 +210,46 @@ def apply_task_update(
         state.notes = update.notes
     if update.recent_event is not None:
         state.recent_event = update.recent_event
+        state.recent_event_key = update.recent_event_key or ""
+        state.recent_event_args = update.recent_event_args or {}
     return state
 
 
-def mark_task_running(state: GuiTaskViewState) -> GuiTaskViewState:
+def mark_task_running(
+    state: GuiTaskViewState,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
+) -> GuiTaskViewState:
     """Mark a task as running without starting conversion in this layer."""
     if state.status in TERMINAL_TASK_STATUSES:
         return state
     state.status = GuiTaskStatus.running
     state.progress = max(state.progress, 5)
-    state.recent_event = "任务开始"
+    _set_recent_event(state, "task.event.started", language)
     return state
 
 
-def mark_task_canceling(state: GuiTaskViewState) -> GuiTaskViewState:
+def mark_task_canceling(
+    state: GuiTaskViewState,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
+) -> GuiTaskViewState:
     """Mark a task as canceling while a worker is winding down."""
     if state.status in TERMINAL_TASK_STATUSES:
         return state
     state.status = GuiTaskStatus.canceling
-    state.recent_event = "正在取消"
+    _set_recent_event(state, "task.event.canceling", language)
     return state
 
 
-def mark_task_canceled(state: GuiTaskViewState) -> GuiTaskViewState:
+def mark_task_canceled(
+    state: GuiTaskViewState,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
+) -> GuiTaskViewState:
     """Mark a task as canceled for visual display."""
     state.status = GuiTaskStatus.canceled
     state.stage = GuiTaskStage.canceled
     state.error = ""
     state.result = ""
-    state.recent_event = "任务已取消"
+    _set_recent_event(state, "task.event.canceled", language)
     return state
 
 
@@ -207,6 +258,7 @@ def mark_task_completed(
     *,
     result: str = "",
     notes: Iterable[str] = (),
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
 ) -> GuiTaskViewState:
     """Mark a task as completed for visual display."""
     if state.status == GuiTaskStatus.canceled:
@@ -217,7 +269,7 @@ def mark_task_completed(
     state.error = ""
     state.result = result or _format_output_target(state.task.output_target)
     state.notes = tuple(notes)
-    state.recent_event = "任务完成"
+    _set_recent_event(state, "task.event.completed", language)
     return state
 
 
@@ -233,17 +285,20 @@ def mark_task_failed(
     state.error = error
     state.progress = min(state.progress, 99)
     state.recent_event = error
+    state.recent_event_key = ""
+    state.recent_event_args = {}
     return state
 
 
 def apply_progress_event(
     state: GuiTaskViewState,
     event: ProgressEvent,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
 ) -> GuiTaskViewState:
     """Merge one core progress event into a GUI task display state."""
     if state.status in TERMINAL_TASK_STATUSES:
         return state
-    state.recent_event = _event_summary(event)
+    _set_recent_progress_event(state, event, language)
     if event.kind == "stage_started":
         _mark_task_active(state)
         state.stage = _stage_for_operation(event.operation)
@@ -268,7 +323,7 @@ def apply_progress_event(
         state.progress = max(state.progress, _stage_start_progress(event.operation))
         return state
     if event.kind == "request_failed":
-        return mark_task_failed(state, event.error or "请求失败")
+        return mark_task_failed(state, event.error or tr(language, "task.event.request_failed"))
     if event.kind == "request_completed":
         _mark_task_active(state)
         state.progress = max(state.progress, _stage_completed_progress(event.operation, event))
@@ -280,16 +335,17 @@ def create_conversion_tasks(
     settings: GuiConversionSettings,
     *,
     repo_root: Path | None = None,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
 ) -> list[GuiConversionTask]:
     """Create pending in-memory tasks from the current GUI settings."""
     if not settings.path_state.can_add_task:
-        raise GuiTaskCreationError("请选择 PDF 输入和输出目标。")
-    pdf_paths = _resolve_input_pdfs(settings)
+        raise GuiTaskCreationError(tr(language, "error.select_input_output"))
+    pdf_paths = _resolve_input_pdfs(settings, language=language)
     if not pdf_paths:
-        raise GuiTaskCreationError("未找到匹配的 PDF 文件。")
+        raise GuiTaskCreationError(tr(language, "error.no_matching_pdf"))
 
     targets = _resolve_output_targets(settings, pdf_paths)
-    _validate_no_target_collisions(pdf_paths, targets)
+    _validate_no_target_collisions(pdf_paths, targets, language=language)
     tasks: list[GuiConversionTask] = []
     for pdf_path, target in zip(pdf_paths, targets, strict=True):
         task_settings = _settings_for_pdf(settings, pdf_path)
@@ -307,14 +363,20 @@ def create_conversion_tasks(
     return tasks
 
 
-def _resolve_input_pdfs(settings: GuiConversionSettings) -> list[Path]:
+def _resolve_input_pdfs(
+    settings: GuiConversionSettings,
+    *,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
+) -> list[Path]:
     selection = settings.path_state.input_selection
     if selection.kind == GuiInputKind.directory:
         if not selection.paths:
             return []
         directory = Path(selection.paths[0]).expanduser()
         if not directory.is_dir():
-            raise GuiTaskCreationError(f"PDF 目录不存在：{directory}")
+            raise GuiTaskCreationError(
+                tr(language, "error.pdf_directory_missing", directory=directory)
+            )
         pattern = settings.batch_pattern.strip()
         return [
             path
@@ -355,6 +417,8 @@ def _resolve_output_targets(
 def _validate_no_target_collisions(
     pdf_paths: Iterable[Path],
     targets: Iterable[GuiOutputTarget],
+    *,
+    language: GuiLanguage | str = GuiLanguage.zh_CN,
 ) -> None:
     seen: dict[Path, Path] = {}
     for pdf_path, target in zip(pdf_paths, targets, strict=True):
@@ -362,7 +426,13 @@ def _validate_no_target_collisions(
         existing = seen.get(resolved)
         if existing is not None:
             raise GuiTaskCreationError(
-                f"输出目标冲突：{existing.name} 和 {pdf_path.name} 都会写入 {target.path}"
+                tr(
+                    language,
+                    "error.target_collision",
+                    existing=existing.name,
+                    current=pdf_path.name,
+                    target=target.path,
+                )
             )
         seen[resolved] = pdf_path
 
@@ -445,6 +515,26 @@ def _mark_task_active(state: GuiTaskViewState) -> None:
         state.status = GuiTaskStatus.running
 
 
+def _set_recent_event(
+    state: GuiTaskViewState,
+    key: str,
+    language: GuiLanguage | str,
+    **kwargs: object,
+) -> None:
+    state.recent_event_key = key
+    state.recent_event_args = dict(kwargs)
+    state.recent_event = tr(language, key, **kwargs)
+
+
+def _set_recent_progress_event(
+    state: GuiTaskViewState,
+    event: ProgressEvent,
+    language: GuiLanguage | str,
+) -> None:
+    key, kwargs = _event_summary_template(event)
+    _set_recent_event(state, key, language, **kwargs)
+
+
 def _stage_for_operation(operation: str) -> GuiTaskStage:
     if operation == "extract":
         return GuiTaskStage.extracting
@@ -501,20 +591,25 @@ def _metadata_int(event: ProgressEvent, key: str) -> int | None:
 
 
 def _event_summary(event: ProgressEvent) -> str:
+    key, kwargs = _event_summary_template(event)
+    return tr(GuiLanguage.zh_CN, key, **kwargs)
+
+
+def _event_summary_template(event: ProgressEvent) -> tuple[str, dict[str, object]]:
     label = event.label or event.operation
     if event.kind == "stage_started":
-        return f"开始：{label}"
+        return "event.stage_started", {"label": label}
     if event.kind == "stage_completed":
-        return f"完成：{label}"
+        return "event.stage_completed", {"label": label}
     if event.kind == "cache_hit":
-        return f"缓存命中：{label}"
+        return "event.cache_hit", {"label": label}
     if event.kind == "retry_scheduled":
         delay = event.delay or 0.0
-        return f"重试：{label}，{delay:.1f}s 后再次请求"
+        return "event.retry_scheduled", {"label": label, "delay": f"{delay:.1f}"}
     if event.kind == "request_started":
-        return f"请求：{label}"
+        return "event.request_started", {"label": label}
     if event.kind == "request_completed":
-        return f"请求完成：{label}"
+        return "event.request_completed", {"label": label}
     if event.kind == "request_failed":
-        return f"失败：{label}"
-    return label
+        return "event.request_failed", {"label": label}
+    return "{label}", {"label": label}
