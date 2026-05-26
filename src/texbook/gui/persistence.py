@@ -10,6 +10,8 @@ from PySide6.QtCore import QSettings, QStandardPaths
 
 from texbook.gui.display import (
     GuiDisplayPreferences,
+    coerce_font_family,
+    coerce_font_point_size,
     coerce_language,
     coerce_theme_mode,
 )
@@ -269,6 +271,14 @@ class GuiSettingsStore:
                 self._read_str("display/language", defaults.language.value),
                 defaults.language,
             ),
+            font_family=coerce_font_family(
+                self._read_str("display/font_family", defaults.font_family),
+                defaults.font_family,
+            ),
+            font_point_size=self._read_font_point_size(
+                "display/font_point_size",
+                defaults.font_point_size,
+            ),
         )
 
     def save_display_preferences(self, preferences: GuiDisplayPreferences) -> None:
@@ -276,6 +286,8 @@ class GuiSettingsStore:
         self._settings.setValue("schema_version", SCHEMA_VERSION)
         self._settings.setValue("display/theme", preferences.theme.value)
         self._settings.setValue("display/language", preferences.language.value)
+        self._settings.setValue("display/font_family", preferences.font_family)
+        self._settings.setValue("display/font_point_size", preferences.font_point_size)
         self._settings.sync()
 
     def default_dialog_directory(self) -> str:
@@ -314,6 +326,15 @@ class GuiSettingsStore:
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    def _read_font_point_size(self, key: str, default: int) -> int:
+        value = self._settings.value(key, default)
+        try:
+            point_size = int(value)
+        except (TypeError, ValueError):
+            return default
+        coerced = coerce_font_point_size(point_size, default)
+        return coerced if coerced == point_size else default
 
 
 def system_default_dialog_directory() -> str:

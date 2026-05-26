@@ -11,7 +11,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QSettings  # noqa: E402
+from PySide6.QtCore import QEvent, QSettings, Qt  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QCheckBox,
@@ -26,12 +26,12 @@ from PySide6.QtWidgets import (  # noqa: E402
     QToolButton,
     QWidget,
 )
-
 from texbook.convert import LatexProjectResult  # noqa: E402
 from texbook.document_class import DocumentClassMode  # noqa: E402
 from texbook.gui.app import GUI_BASE_FONT_POINT_SIZE, create_application  # noqa: E402
 from texbook.gui.core_adapter import GuiCoreAdapterError, build_core_conversion_bundle  # noqa: E402
 from texbook.gui.display import GuiDisplayPreferences, GuiLanguage, GuiThemeMode  # noqa: E402
+from texbook.gui.dialogs import AboutDialog, SettingsDialog  # noqa: E402
 from texbook.gui.executor import (  # noqa: E402
     GuiCancellationToken,
     GuiOverwriteConfirmationRequest,
@@ -199,6 +199,14 @@ class PopupTrackingComboBox(QComboBox):
         super().hidePopup()
 
 
+class _FakeWheelEvent:
+    def __init__(self):
+        self.ignored = False
+
+    def ignore(self):
+        self.ignored = True
+
+
 def test_icon_resource_resolves_to_docs_icon():
     assert resolve_app_icon_path() == ROOT / "docs" / "icon.ico"
 
@@ -240,6 +248,8 @@ def test_gui_dark_stylesheet_covers_combo_popup_list():
     assert "color: #edf1f7" in stylesheet
     assert "selection-background-color: #4aa3ff" in stylesheet
     assert "selection-color: #ffffff" in stylesheet
+    assert "QDialog#aboutDialog" in stylesheet
+    assert "QDialog#settingsDialog" in stylesheet
 
 
 def test_main_window_has_basic_lifecycle_shell():
@@ -257,38 +267,9 @@ def test_main_window_has_basic_lifecycle_shell():
     app.quit()
 
 
-def test_main_window_about_action_shows_project_help(monkeypatch):
+def test_main_window_about_action_opens_about_dialog(monkeypatch):
     app = create_application(["texbook-gui-test"])
     window = MainWindow()
-    captured = {}
-
-    class FakeMessageBox:
-        Icon = QMessageBox.Icon
-        StandardButton = QMessageBox.StandardButton
-
-        def __init__(self, parent=None):
-            captured["parent"] = parent
-
-        def setWindowTitle(self, text):
-            captured["title"] = text
-
-        def setIcon(self, icon):
-            captured["icon"] = icon
-
-        def setText(self, text):
-            captured["text"] = text
-
-        def setInformativeText(self, text):
-            captured["informative"] = text
-
-        def setStandardButtons(self, buttons):
-            captured["buttons"] = buttons
-
-        def exec(self):
-            captured["exec"] = True
-            return QMessageBox.StandardButton.Ok
-
-    monkeypatch.setattr("texbook.gui.main_window.QMessageBox", FakeMessageBox)
 
     help_menu_action = window.menuBar().actions()[1]
     about_action = help_menu_action.menu().actions()[0]
@@ -296,14 +277,22 @@ def test_main_window_about_action_shows_project_help(monkeypatch):
     assert about_action.isEnabled() is True
     assert about_action.text() == "关于 TeXBook"
 
+    about_dialogs = []
+
+    def fake_exec(self):
+        about_dialogs.append(self)
+        assert isinstance(self, AboutDialog)
+        assert self.windowTitle() == "关于 TeXBook"
+        assert not self.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint
+        assert not self.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint
+        return 0
+
+    monkeypatch.setattr(AboutDialog, "exec", fake_exec)
+
     about_action.trigger()
 
-    assert captured["parent"] is window
-    assert captured["title"] == "关于 TeXBook"
-    assert "PDF 转 LaTeX" in captured["text"]
-    assert "添加任务" in captured["informative"]
-    assert "不负责 LaTeX 编译" in captured["informative"]
-    assert captured["exec"] is True
+    assert len(about_dialogs) == 1
+    assert about_dialogs[0].parent() is window
 
     window.close()
     app.quit()
@@ -327,6 +316,115 @@ def test_main_window_closes_combo_popups_on_state_changes():
     window.changeEvent(QEvent(QEvent.Type.ActivationChange))
 
     assert combo.hide_popup_calls == 3
+
+    window.close()
+    app.quit()
+
+
+def test_settings_dialog_updates_font_preferences():
+    app = create_application(["texbook-gui-test"])
+    dialog = SettingsDialog(
+        preferences=GuiDisplayPreferences(
+            theme=GuiThemeMode.dark,
+            language=GuiLanguage.zh_CN,
+            font_family="Segoe UI",
+            font_point_size=13,
+        )
+    )
+
+    assert dialog.windowTitle() == "GUI 设置"
+    assert not dialog.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint
+    assert not dialog.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint
+
+    dialog.findChild(QComboBox, "settingsFontFamilyCombo").setCurrentText("Arial")
+    dialog.findChild(QSpinBox, "settingsFontSizeSpinBox").setValue(15)
+    dialog._accept()
+    preferences = dialog.selected_preferences()
+
+    assert preferences.theme == GuiThemeMode.dark
+    assert preferences.language == GuiLanguage.zh_CN
+    assert preferences.font_family == "Arial"
+    assert preferences.font_point_size == 15
+
+    dialog.close()
+    app.quit()
+
+
+def test_scroll_sensitive_controls_ignore_wheel_without_focus():
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+    combo = panel.findChild(QComboBox, "outputKindCombo")
+    spin = panel.findChild(QSpinBox, "chunkPagesSpinBox")
+
+    combo.clearFocus()
+    spin.clearFocus()
+    combo_event = _FakeWheelEvent()
+    spin_event = _FakeWheelEvent()
+
+    combo.wheelEvent(combo_event)
+    spin.wheelEvent(spin_event)
+
+    assert combo_event.ignored is True
+    assert spin_event.ignored is True
+    assert combo.currentText() == "单个 .tex"
+    assert spin.value() == 4
+
+    panel.close()
+    app.quit()
+
+
+def test_clicking_non_field_widget_clears_control_focus():
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+    label = panel.findChild(QLabel, "taskEmptyTitleLabel")
+
+    class FakeFocusWidget:
+        def __init__(self):
+            self.cleared = False
+
+        def clearFocus(self):
+            self.cleared = True
+
+    fake_focus = FakeFocusWidget()
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr("texbook.gui.main_panel.QApplication.focusWidget", lambda: fake_focus)
+
+    panel.eventFilter(label, QEvent(QEvent.Type.MouseButtonPress))
+
+    assert fake_focus.cleared is True
+
+    monkeypatch.undo()
+
+    panel.close()
+    app.quit()
+
+
+def test_main_window_settings_button_applies_font_preferences(monkeypatch):
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+
+    monkeypatch.setattr(
+        "texbook.gui.main_window.SettingsDialog.exec",
+        lambda self: self.DialogCode.Accepted,
+    )
+    monkeypatch.setattr(
+        "texbook.gui.main_window.SettingsDialog.selected_preferences",
+        lambda self: GuiDisplayPreferences(
+            theme=GuiThemeMode.light,
+            language=GuiLanguage.zh_CN,
+            font_family="Arial",
+            font_point_size=14,
+        ),
+    )
+
+    panel.findChild(QToolButton, "settingsButton").click()
+
+    assert panel.current_display_preferences().font_family == "Arial"
+    assert panel.current_display_preferences().font_point_size == 14
+    assert app.font().pointSize() == 14
+    assert 'font-family: "Arial"' in window.styleSheet()
 
     window.close()
     app.quit()
@@ -727,6 +825,48 @@ def test_conversion_panel_theme_and_language_switch_keep_stable_values():
     app.quit()
 
 
+def test_reset_defaults_keeps_theme_language_paths_and_tasks(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+
+    panel.set_display_preferences(
+        GuiDisplayPreferences(
+            theme=GuiThemeMode.dark,
+            language=GuiLanguage.en_US,
+            font_family="Arial",
+            font_point_size=14,
+        ),
+        emit=True,
+    )
+    panel.set_path_memory(GuiPathMemory(last_input_directory=r"C:\books"))
+    panel.findChild(QLineEdit, "pagesField").setText("1-2")
+    panel.findChild(QComboBox, "outputKindCombo").setCurrentText("Project Folder")
+    panel.set_input_selection(GuiInputSelection.from_single_file("a.pdf"))
+    panel.set_output_directory("out/a.tex")
+    panel.findChild(QPushButton, "addTaskButton").click()
+    assert len(panel.task_view_states()) == 1
+
+    panel.findChild(QToolButton, "resetDefaultsButton").click()
+
+    preferences = panel.current_display_preferences()
+    assert preferences.theme == GuiThemeMode.dark
+    assert preferences.language == GuiLanguage.en_US
+    assert preferences.font_family == "Microsoft YaHei UI"
+    assert preferences.font_point_size == GUI_BASE_FONT_POINT_SIZE
+    assert panel.current_path_memory().last_input_directory == r"C:\books"
+    assert len(panel.task_view_states()) == 1
+    assert panel.current_settings().pages == ""
+    assert panel.current_settings().output_kind == GuiOutputKind.tex_file
+    assert panel.selection_state == GuiPathSelectionState()
+
+    window.close()
+    app.quit()
+
+
 def test_conversion_panel_english_validation_and_task_text(monkeypatch):
     monkeypatch.setenv("TEXBOOK_MODEL", "model")
     monkeypatch.setenv("TEXBOOK_API_KEY", "key")
@@ -877,6 +1017,8 @@ def test_gui_settings_store_round_trips_display_preferences(tmp_path):
         display_preferences=GuiDisplayPreferences(
             theme=GuiThemeMode.dark,
             language=GuiLanguage.en_US,
+            font_family="Segoe UI",
+            font_point_size=13,
         ),
     )
 
@@ -885,10 +1027,14 @@ def test_gui_settings_store_round_trips_display_preferences(tmp_path):
 
     assert loaded.display_preferences.theme == GuiThemeMode.dark
     assert loaded.display_preferences.language == GuiLanguage.en_US
+    assert loaded.display_preferences.font_family == "Segoe UI"
+    assert loaded.display_preferences.font_point_size == 13
 
     raw = store._settings
     raw.setValue("display/theme", "invalid")
     raw.setValue("display/language", "invalid")
+    raw.setValue("display/font_family", "")
+    raw.setValue("display/font_point_size", 4)
 
     loaded = store.load_state()
 

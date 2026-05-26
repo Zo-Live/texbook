@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
+    QComboBox,
+    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -125,3 +129,42 @@ class MetricPill(QFrame):
     def set_label(self, label: str) -> None:
         """Update the metric label."""
         self.label_widget.setText(label)
+
+
+class FocusWheelComboBox(QComboBox):
+    """Combo box that ignores mouse wheel changes until it has focus."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class FocusWheelSpinBox(QSpinBox):
+    """Spin box that ignores mouse wheel changes until it has focus."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class FocusWheelDoubleSpinBox(QDoubleSpinBox):
+    """Double spin box that ignores mouse wheel changes until it has focus."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class FocusAwareWidget(QWidget):
+    """A widget that clears child focus when the user clicks on empty space."""
+
+    def mousePressEvent(self, event):  # type: ignore[override]
+        if self.childAt(event.position().toPoint()) is None:
+            self.clearFocus()
+        super().mousePressEvent(event)

@@ -5,6 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from PySide6.QtGui import QFont
+
+DEFAULT_GUI_FONT_FAMILY = "Microsoft YaHei UI"
+GUI_FONT_FALLBACKS = (DEFAULT_GUI_FONT_FAMILY, "Segoe UI", "Arial")
+DEFAULT_GUI_FONT_POINT_SIZE = 11
+MIN_GUI_FONT_POINT_SIZE = 8
+MAX_GUI_FONT_POINT_SIZE = 24
+
 
 class GuiThemeMode(str, Enum):
     """Theme modes exposed by the GUI."""
@@ -26,6 +34,8 @@ class GuiDisplayPreferences:
 
     theme: GuiThemeMode = GuiThemeMode.light
     language: GuiLanguage = GuiLanguage.zh_CN
+    font_family: str = DEFAULT_GUI_FONT_FAMILY
+    font_point_size: int = DEFAULT_GUI_FONT_POINT_SIZE
 
     def __post_init__(self) -> None:
         theme = self.theme
@@ -36,6 +46,12 @@ class GuiDisplayPreferences:
             language = GuiLanguage(language)
         object.__setattr__(self, "theme", theme)
         object.__setattr__(self, "language", language)
+        object.__setattr__(self, "font_family", coerce_font_family(self.font_family))
+        object.__setattr__(
+            self,
+            "font_point_size",
+            coerce_font_point_size(self.font_point_size),
+        )
 
 
 def coerce_theme_mode(value: object, default: GuiThemeMode = GuiThemeMode.light) -> GuiThemeMode:
@@ -52,3 +68,42 @@ def coerce_language(value: object, default: GuiLanguage = GuiLanguage.zh_CN) -> 
         return GuiLanguage(str(value))
     except (TypeError, ValueError):
         return default
+
+
+def coerce_font_family(
+    value: object,
+    default: str = DEFAULT_GUI_FONT_FAMILY,
+) -> str:
+    """Return a non-empty GUI font family name."""
+    if value is None:
+        return default
+    try:
+        family = str(value).strip()
+    except (TypeError, ValueError):
+        return default
+    return family or default
+
+
+def coerce_font_point_size(
+    value: object,
+    default: int = DEFAULT_GUI_FONT_POINT_SIZE,
+) -> int:
+    """Return a bounded GUI font point size."""
+    try:
+        point_size = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(MIN_GUI_FONT_POINT_SIZE, min(MAX_GUI_FONT_POINT_SIZE, point_size))
+
+
+def build_gui_font(
+    font_family: str,
+    font_point_size: int,
+    *,
+    current_font: QFont | None = None,
+) -> QFont:
+    """Build a Qt font that applies the configured GUI display preferences."""
+    font = QFont(current_font or QFont())
+    font.setFamilies([coerce_font_family(font_family), *GUI_FONT_FALLBACKS])
+    font.setPointSize(coerce_font_point_size(font_point_size))
+    return font

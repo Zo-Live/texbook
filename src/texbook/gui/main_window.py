@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QSize
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
-from PySide6.QtWidgets import QMainWindow, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMainWindow
 
-from texbook.gui.display import GuiDisplayPreferences
+from texbook.gui.display import GuiDisplayPreferences, build_gui_font
+from texbook.gui.dialogs import AboutDialog, SettingsDialog
 from texbook.gui.i18n import tr
 from texbook.gui.main_panel import ConversionMainPanel
 from texbook.gui.persistence import GuiPersistentState, GuiSettingsStore
@@ -22,6 +23,7 @@ class MainWindow(QMainWindow):
         self._settings_store = settings_store or GuiSettingsStore()
         self._initial_state = self._settings_store.load_state()
         self._display_preferences = self._initial_state.display_preferences
+        self._open_dialogs: list[QDialog] = []
         self.setWindowTitle(self._tr("app.window_title"))
         self.setMinimumSize(QSize(960, 640))
         self.resize(QSize(1180, 760))
@@ -30,7 +32,6 @@ class MainWindow(QMainWindow):
         if icon_path is not None:
             self.setWindowIcon(QIcon(str(icon_path)))
 
-        self.setStyleSheet(build_fluent_stylesheet(self._display_preferences.theme))
         self._setup_menu_bar()
         self._setup_status_bar()
         panel = ConversionMainPanel(
@@ -38,8 +39,11 @@ class MainWindow(QMainWindow):
             display_preferences=self._display_preferences,
         )
         panel.display_preferences_changed.connect(self._apply_display_preferences)
+        panel.settings_requested.connect(self._show_settings_dialog)
+        panel.reset_defaults_requested.connect(self._reset_panel_defaults)
         self.setCentralWidget(panel)
         self._restore_gui_state(panel)
+        self._apply_display_preferences(self._display_preferences)
 
     def _tr(self, key: str, **kwargs: object) -> str:
         return tr(self._display_preferences.language, key, **kwargs)
@@ -68,7 +72,36 @@ class MainWindow(QMainWindow):
             return
         self._display_preferences = preferences
         self.setWindowTitle(self._tr("app.window_title"))
-        self.setStyleSheet(build_fluent_stylesheet(preferences.theme))
+        app = QApplication.instance()
+        if app is not None:
+            app.setFont(
+                build_gui_font(
+                    preferences.font_family,
+                    preferences.font_point_size,
+                    current_font=app.font(),
+                )
+            )
+            app.setStyleSheet(
+                build_fluent_stylesheet(
+                    preferences.theme,
+                    font_family=preferences.font_family,
+                    font_point_size=preferences.font_point_size,
+                )
+            )
+        self.setFont(
+            build_gui_font(
+                preferences.font_family,
+                preferences.font_point_size,
+                current_font=self.font(),
+            )
+        )
+        self.setStyleSheet(
+            build_fluent_stylesheet(
+                preferences.theme,
+                font_family=preferences.font_family,
+                font_point_size=preferences.font_point_size,
+            )
+        )
         self._retranslate_ui()
 
     def _retranslate_ui(self) -> None:
@@ -78,16 +111,43 @@ class MainWindow(QMainWindow):
         self._help_menu.setTitle(self._tr("menu.help"))
         self._about_action.setText(self._tr("menu.about", app_name=APP_DISPLAY_NAME))
 
+    def _track_dialog(self, dialog: QDialog) -> int:
+        self._open_dialogs.append(dialog)
+        try:
+            return dialog.exec()
+        finally:
+            if dialog in self._open_dialogs:
+                self._open_dialogs.remove(dialog)
+            dialog.deleteLater()
+
     def _show_about_dialog(self) -> None:
-        message_box = QMessageBox(self)
-        message_box.setWindowTitle(self._tr("dialog.about.title", app_name=APP_DISPLAY_NAME))
-        message_box.setIcon(QMessageBox.Icon.Information)
-        message_box.setText(self._tr("dialog.about.text", app_name=APP_DISPLAY_NAME))
-        message_box.setInformativeText(
-            self._tr("dialog.about.informative", app_name=APP_DISPLAY_NAME)
+        dialog = AboutDialog(
+            self,
+            app_name=APP_DISPLAY_NAME,
+            preferences=self._display_preferences,
         )
-        message_box.setStandardButtons(QMessageBox.StandardButton.Ok)
-        message_box.exec()
+        self._track_dialog(dialog)
+
+    def _show_settings_dialog(self) -> None:
+        panel = self.centralWidget()
+        if not isinstance(panel, ConversionMainPanel):
+            return
+        dialog = SettingsDialog(self, preferences=self._display_preferences)
+        if self._track_dialog(dialog) == QDialog.DialogCode.Accepted:
+            panel.set_display_preferences(dialog.selected_preferences(), emit=True)
+
+    def _reset_panel_defaults(self) -> None:
+        panel = self.centralWidget()
+        if not isinstance(panel, ConversionMainPanel):
+            return
+        panel.reset_to_default_configuration()
+        panel.set_display_preferences(
+            GuiDisplayPreferences(
+                theme=self._display_preferences.theme,
+                language=self._display_preferences.language,
+            ),
+            emit=True,
+        )
 
     def _save_gui_state(self) -> None:
         panel = self.centralWidget()
@@ -106,18 +166,35 @@ class MainWindow(QMainWindow):
         close_popups = getattr(panel, "close_popups", None)
         if callable(close_popups):
             close_popups()
+        app = QApplication.instance()
+        if app is not None:
+            active_popup = app.activePopupWidget()
+            if active_popup is not None:
+                active_popup.close()
+            for widget in app.topLevelWidgets():
+                hide_popup = getattr(widget, "hidePopup", None)
+                if callable(hide_popup):
+                    hide_popup()
+
+    def _close_transient_dialogs(self) -> None:
+        for dialog in list(self._open_dialogs):
+            dialog.close()
+        self._open_dialogs.clear()
 
     def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.ActivationChange:
+            self._close_panel_popups()
         if event.type() in {
             QEvent.Type.WindowStateChange,
-            QEvent.Type.ActivationChange,
             QEvent.Type.Hide,
         }:
             self._close_panel_popups()
+            self._close_transient_dialogs()
         super().changeEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._close_panel_popups()
+        self._close_transient_dialogs()
         self._save_gui_state()
         panel = self.centralWidget()
         close_executor = getattr(panel, "close_executor", None)

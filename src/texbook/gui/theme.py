@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from texbook.gui.display import GuiThemeMode
+from texbook.gui.display import GuiThemeMode, coerce_font_point_size
 
 
 _LIGHT_TOKENS = {
@@ -80,20 +80,31 @@ _DARK_TOKENS = {
 }
 
 
-def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> str:
+def build_fluent_stylesheet(
+    theme: GuiThemeMode | str = GuiThemeMode.light,
+    *,
+    font_family: str = "Microsoft YaHei UI",
+    font_point_size: int = 11,
+) -> str:
     """Return the Fluent-style stylesheet used by the GUI shell."""
     try:
         theme_mode = GuiThemeMode(theme)
     except ValueError:
         theme_mode = GuiThemeMode.light
     token = _DARK_TOKENS if theme_mode == GuiThemeMode.dark else _LIGHT_TOKENS
+    base_point_size = coerce_font_point_size(font_point_size)
+    title_point_size = base_point_size + 6
+    section_point_size = base_point_size + 1
+    field_min_height = max(28, base_point_size * 2 + 6)
+    button_min_height = max(30, base_point_size * 2 + 8)
 
     return f"""
     QMainWindow,
     QWidget#conversionMainPanel {{
         background: {token["window_bg"]};
         color: {token["text"]};
-        font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+        font-family: "{font_family}", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+        font-size: {base_point_size}pt;
     }}
 
     QMenuBar,
@@ -116,6 +127,17 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         background: {token["surface"]};
         color: {token["text"]};
         border: 1px solid {token["border"]};
+    }}
+
+    QDialog {{
+        background: {token["surface"]};
+        color: {token["text"]};
+    }}
+
+    QDialog#aboutDialog,
+    QDialog#settingsDialog {{
+        background: {token["surface"]};
+        color: {token["text"]};
     }}
 
     QMessageBox {{
@@ -155,7 +177,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
 
     QLabel#appTitleLabel {{
         color: {token["text_strong"]};
-        font-size: 17pt;
+        font-size: {title_point_size}pt;
         font-weight: 700;
     }}
 
@@ -166,7 +188,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
 
     QLabel[sectionTitle="true"] {{
         color: {token["text_strong"]};
-        font-size: 12pt;
+        font-size: {section_point_size}pt;
         font-weight: 700;
     }}
 
@@ -233,7 +255,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         border-radius: 6px;
         color: {token["text"]};
         padding: 7px 10px;
-        min-height: 28px;
+        min-height: {field_min_height}px;
         selection-background-color: {token["accent"]};
     }}
 
@@ -289,7 +311,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         border-radius: 6px;
         color: {token["text"]};
         padding: 7px 11px;
-        min-height: 30px;
+        min-height: {button_min_height}px;
     }}
 
     QPushButton:hover,

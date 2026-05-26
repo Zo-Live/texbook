@@ -8,6 +8,11 @@ from collections.abc import Sequence
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
+from texbook.gui.display import (
+    GUI_FONT_FALLBACKS,
+    DEFAULT_GUI_FONT_POINT_SIZE,
+    build_gui_font,
+)
 from texbook.gui.main_window import MainWindow
 from texbook.gui.resources import (
     APP_DISPLAY_NAME,
@@ -15,8 +20,8 @@ from texbook.gui.resources import (
     resolve_app_icon_path,
 )
 
-GUI_FONT_FAMILIES = ("Microsoft YaHei UI", "Segoe UI", "Arial")
-GUI_BASE_FONT_POINT_SIZE = 11
+GUI_FONT_FAMILIES = GUI_FONT_FALLBACKS
+GUI_BASE_FONT_POINT_SIZE = DEFAULT_GUI_FONT_POINT_SIZE
 
 
 def create_application(argv: Sequence[str] | None = None) -> QApplication:
@@ -37,10 +42,7 @@ def create_application(argv: Sequence[str] | None = None) -> QApplication:
 
 
 def _build_application_font(current_font: QFont) -> QFont:
-    font = QFont(current_font)
-    font.setFamilies(list(GUI_FONT_FAMILIES))
-    font.setPointSize(GUI_BASE_FONT_POINT_SIZE)
-    return font
+    return build_gui_font(GUI_FONT_FAMILIES[0], GUI_BASE_FONT_POINT_SIZE, current_font=current_font)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

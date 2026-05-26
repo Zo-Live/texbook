@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QEvent, QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QAbstractSpinBox,
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -28,7 +28,15 @@ from PySide6.QtWidgets import (
 )
 
 from texbook.gui.executor import GuiOverwriteConfirmationRequest, GuiTaskExecutor
-from texbook.gui.display import GuiDisplayPreferences, GuiLanguage, GuiThemeMode
+from texbook.gui.display import (
+    DEFAULT_GUI_FONT_FAMILY,
+    DEFAULT_GUI_FONT_POINT_SIZE,
+    GuiDisplayPreferences,
+    GuiLanguage,
+    GuiThemeMode,
+    build_gui_font,
+)
+from texbook.gui.dialogs import AboutDialog, SettingsDialog
 from texbook.gui.i18n import tr
 from texbook.gui.persistence import (
     GuiPathMemory,
@@ -67,7 +75,15 @@ from texbook.gui.tasks import (
     task_stage_label,
     task_status_label,
 )
-from texbook.gui.widgets import InlineField, MetricPill, OptionGrid, SectionPanel
+from texbook.gui.widgets import (
+    FocusWheelComboBox,
+    FocusWheelDoubleSpinBox,
+    FocusWheelSpinBox,
+    InlineField,
+    MetricPill,
+    OptionGrid,
+    SectionPanel,
+)
 from texbook.gui.theme import build_fluent_stylesheet
 from texbook.llm.scheduler import ProgressEvent
 
@@ -93,6 +109,8 @@ class ConversionMainPanel(QWidget):
     """Fluent Design main panel shown when the GUI opens."""
 
     display_preferences_changed = Signal(object)
+    settings_requested = Signal()
+    reset_defaults_requested = Signal()
 
     def __init__(
         self,
@@ -113,6 +131,9 @@ class ConversionMainPanel(QWidget):
         self._sections: dict[str, SectionPanel] = {}
         self._row_labels: dict[str, QLabel] = {}
         self._metric_pills: dict[GuiTaskStatus, MetricPill] = {}
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 18)
@@ -176,6 +197,22 @@ class ConversionMainPanel(QWidget):
         )
         self.language_button.setEnabled(True)
         layout.addWidget(self.language_button)
+
+        self.settings_button = self._make_tool_button(
+            "settingsButton",
+            "",
+            QStyle.StandardPixmap.SP_FileDialogDetailedView,
+        )
+        self.settings_button.setEnabled(True)
+        layout.addWidget(self.settings_button)
+
+        self.reset_defaults_button = self._make_tool_button(
+            "resetDefaultsButton",
+            "",
+            QStyle.StandardPixmap.SP_BrowserReload,
+        )
+        self.reset_defaults_button.setEnabled(True)
+        layout.addWidget(self.reset_defaults_button)
 
         add_task = QPushButton(command_bar)
         add_task.setObjectName("addTaskButton")
@@ -284,7 +321,7 @@ class ConversionMainPanel(QWidget):
         self.pdf_input_browse_button = browse
         self._add_grid_row(grid, "field.pdf_input", InlineField(pdf_input, browse, parent=panel))
 
-        input_type = QComboBox(panel)
+        input_type = FocusWheelComboBox(panel)
         input_type.setObjectName("inputTypeCombo")
         self._set_combo_items(input_type, _INPUT_KIND_ITEMS, GuiInputKind.single_file.value)
         self.input_type_combo = input_type
@@ -307,7 +344,7 @@ class ConversionMainPanel(QWidget):
         )
         grid = OptionGrid(parent=panel)
 
-        output_kind = QComboBox(panel)
+        output_kind = FocusWheelComboBox(panel)
         output_kind.setObjectName("outputKindCombo")
         self._set_combo_items(output_kind, _OUTPUT_KIND_ITEMS, GuiOutputKind.tex_file.value)
         self.output_kind_combo = output_kind
@@ -351,7 +388,7 @@ class ConversionMainPanel(QWidget):
         self.manual_title_field = manual_title
         self._add_grid_row(grid, "field.manual_title", manual_title)
 
-        title_source = QComboBox(panel)
+        title_source = FocusWheelComboBox(panel)
         title_source.setObjectName("titleSourceCombo")
         title_source.addItems(["filename", "llm"])
         self.title_source_combo = title_source
@@ -372,7 +409,7 @@ class ConversionMainPanel(QWidget):
         )
         grid = OptionGrid(parent=panel)
 
-        document_class = QComboBox(panel)
+        document_class = FocusWheelComboBox(panel)
         document_class.setObjectName("documentClassCombo")
         document_class.addItems(
             ["auto", "ctexart", "ctexbook", "ctexbeamer", "article", "book", "beamer"]
@@ -380,7 +417,7 @@ class ConversionMainPanel(QWidget):
         self.document_class_combo = document_class
         self._add_grid_row(grid, "field.document_class", document_class)
 
-        structure = QComboBox(panel)
+        structure = FocusWheelComboBox(panel)
         structure.setObjectName("structureModeCombo")
         structure.addItems(["auto", "off", "local", "llm"])
         self.structure_mode_combo = structure
@@ -427,14 +464,14 @@ class ConversionMainPanel(QWidget):
         api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_field = api_key
 
-        api_key_source = QComboBox(panel)
+        api_key_source = FocusWheelComboBox(panel)
         api_key_source.setObjectName("apiKeySourceCombo")
         self._set_combo_items(api_key_source, _API_KEY_SOURCE_ITEMS, GuiApiKeySource.direct.value)
         self.api_key_source_combo = api_key_source
         self._add_grid_row(grid, "field.key_source", api_key_source)
         grid.add_row("API Key", api_key)
 
-        preset = QComboBox(panel)
+        preset = FocusWheelComboBox(panel)
         preset.setObjectName("promptPresetCombo")
         preset.setEditable(True)
         preset.addItem("chinese-math")
@@ -492,7 +529,7 @@ class ConversionMainPanel(QWidget):
         self.llm_concurrency_spin_box = llm_concurrency
         self._add_grid_row(grid, "field.llm_concurrency", llm_concurrency)
 
-        llm_interval = QDoubleSpinBox(panel)
+        llm_interval = FocusWheelDoubleSpinBox(panel)
         llm_interval.setObjectName("llmIntervalSpinBox")
         llm_interval.setRange(0.0, 600.0)
         llm_interval.setDecimals(1)
@@ -528,7 +565,7 @@ class ConversionMainPanel(QWidget):
         self.image_dpi_max_spin_box = image_dpi_max
         self._add_grid_row(grid, "field.image_dpi_max", image_dpi_max)
 
-        image_format = QComboBox(panel)
+        image_format = FocusWheelComboBox(panel)
         image_format.setObjectName("imageFormatCombo")
         image_format.addItems(["auto", "png", "jpeg"])
         image_format.setCurrentText("png")
@@ -543,7 +580,7 @@ class ConversionMainPanel(QWidget):
         self.llm_retries_spin_box = retries
         self._add_grid_row(grid, "field.retries", retries)
 
-        retry_initial_delay = QDoubleSpinBox(panel)
+        retry_initial_delay = FocusWheelDoubleSpinBox(panel)
         retry_initial_delay.setObjectName("llmRetryInitialDelaySpinBox")
         retry_initial_delay.setRange(0.0, 600.0)
         retry_initial_delay.setDecimals(1)
@@ -553,7 +590,7 @@ class ConversionMainPanel(QWidget):
         self.llm_retry_initial_delay_spin_box = retry_initial_delay
         self._add_grid_row(grid, "field.retry_initial_delay", retry_initial_delay)
 
-        retry_max_delay = QDoubleSpinBox(panel)
+        retry_max_delay = FocusWheelDoubleSpinBox(panel)
         retry_max_delay.setObjectName("llmRetryMaxDelaySpinBox")
         retry_max_delay.setRange(0.0, 600.0)
         retry_max_delay.setDecimals(1)
@@ -563,7 +600,7 @@ class ConversionMainPanel(QWidget):
         self.llm_retry_max_delay_spin_box = retry_max_delay
         self._add_grid_row(grid, "field.retry_max_delay", retry_max_delay)
 
-        timeout = QDoubleSpinBox(panel)
+        timeout = FocusWheelDoubleSpinBox(panel)
         timeout.setObjectName("timeoutSpinBox")
         timeout.setRange(0.0, 6000.0)
         timeout.setDecimals(1)
@@ -573,7 +610,7 @@ class ConversionMainPanel(QWidget):
         self.timeout_spin_box = timeout
         self._add_grid_row(grid, "field.timeout", timeout)
 
-        temperature = QDoubleSpinBox(panel)
+        temperature = FocusWheelDoubleSpinBox(panel)
         temperature.setObjectName("temperatureSpinBox")
         temperature.setRange(0.0, 2.0)
         temperature.setDecimals(2)
@@ -586,13 +623,13 @@ class ConversionMainPanel(QWidget):
         self.max_tokens_spin_box = max_tokens
         grid.add_row("Max tokens", max_tokens)
 
-        beamer_style = QComboBox(panel)
+        beamer_style = FocusWheelComboBox(panel)
         beamer_style.setObjectName("beamerBoxStyleCombo")
         beamer_style.addItems(["block", "tcolorbox"])
         self.beamer_box_style_combo = beamer_style
         self._add_grid_row(grid, "field.beamer_box", beamer_style)
 
-        ctex_font = QComboBox(panel)
+        ctex_font = FocusWheelComboBox(panel)
         ctex_font.setObjectName("ctexFontProfileCombo")
         ctex_font.addItems(["default", "local"])
         self.ctex_font_profile_combo = ctex_font
@@ -722,7 +759,7 @@ class ConversionMainPanel(QWidget):
         return button
 
     def _make_spin_box(self, object_name: str, minimum: int, maximum: int, value: int) -> QSpinBox:
-        spin_box = QSpinBox(self)
+        spin_box = FocusWheelSpinBox(self)
         spin_box.setObjectName(object_name)
         spin_box.setRange(minimum, maximum)
         spin_box.setValue(value)
@@ -735,6 +772,12 @@ class ConversionMainPanel(QWidget):
         self.cache_browse_button.clicked.connect(self._browse_cache_directory)
         self.theme_button.clicked.connect(self.toggle_theme)
         self.language_button.clicked.connect(self.toggle_language)
+        self.settings_button.clicked.connect(
+            lambda _checked=False: self.settings_requested.emit()
+        )
+        self.reset_defaults_button.clicked.connect(
+            lambda _checked=False: self.reset_defaults_requested.emit()
+        )
         self.input_type_combo.currentTextChanged.connect(self._change_input_kind)
         self.output_kind_combo.currentTextChanged.connect(self._sync_gui_state)
         self.batch_pattern_field.textChanged.connect(self._sync_gui_state)
@@ -792,6 +835,15 @@ class ConversionMainPanel(QWidget):
         for combo_box in self.findChildren(QComboBox):
             combo_box.hidePopup()
 
+    def eventFilter(self, watched: object, event: object) -> bool:
+        if isinstance(event, QEvent) and event.type() == QEvent.Type.MouseButtonPress:
+            widget = watched if isinstance(watched, QWidget) else None
+            if widget is not None and widget.focusPolicy() == Qt.FocusPolicy.NoFocus:
+                focus_widget = QApplication.focusWidget()
+                if focus_widget is not None:
+                    focus_widget.clearFocus()
+        return super().eventFilter(watched, event)
+
     def set_display_preferences(
         self,
         preferences: GuiDisplayPreferences,
@@ -812,7 +864,12 @@ class ConversionMainPanel(QWidget):
             GuiThemeMode.dark if self._theme == GuiThemeMode.light else GuiThemeMode.light
         )
         self.set_display_preferences(
-            GuiDisplayPreferences(theme=next_theme, language=self._language),
+            GuiDisplayPreferences(
+                theme=next_theme,
+                language=self._language,
+                font_family=self._display_preferences.font_family,
+                font_point_size=self._display_preferences.font_point_size,
+            ),
             emit=True,
         )
 
@@ -822,12 +879,30 @@ class ConversionMainPanel(QWidget):
             GuiLanguage.en_US if self._language == GuiLanguage.zh_CN else GuiLanguage.zh_CN
         )
         self.set_display_preferences(
-            GuiDisplayPreferences(theme=self._theme, language=next_language),
+            GuiDisplayPreferences(
+                theme=self._theme,
+                language=next_language,
+                font_family=self._display_preferences.font_family,
+                font_point_size=self._display_preferences.font_point_size,
+            ),
             emit=True,
         )
 
     def _apply_theme(self) -> None:
-        self.setStyleSheet(build_fluent_stylesheet(self._theme))
+        self.setFont(
+            build_gui_font(
+                self._display_preferences.font_family or DEFAULT_GUI_FONT_FAMILY,
+                self._display_preferences.font_point_size or DEFAULT_GUI_FONT_POINT_SIZE,
+                current_font=self.font(),
+            )
+        )
+        self.setStyleSheet(
+            build_fluent_stylesheet(
+                self._theme,
+                font_family=self._display_preferences.font_family,
+                font_point_size=self._display_preferences.font_point_size,
+            )
+        )
 
     def _retranslate_ui(self) -> None:
         self.subtitle_label.setText(self._tr("command.subtitle"))
@@ -851,6 +926,10 @@ class ConversionMainPanel(QWidget):
             if self._language == GuiLanguage.en_US
             else self._tr("command.language.switch_to_en")
         )
+        self.settings_button.setText(self._tr("command.settings"))
+        self.settings_button.setToolTip(self._tr("command.settings.tooltip"))
+        self.reset_defaults_button.setText(self._tr("command.reset_defaults"))
+        self.reset_defaults_button.setToolTip(self._tr("command.reset_defaults.tooltip"))
         self.add_task_button.setText(self._tr("button.add_task"))
         self.add_task_button.setToolTip(self._tr("button.add_task.tooltip"))
         self.start_button.setText(self._tr("button.start"))
@@ -1121,6 +1200,19 @@ class ConversionMainPanel(QWidget):
         self.structure_max_pages_spin_box.setEnabled(project_mode)
         self.batch_workers_spin_box.setEnabled(self._current_input_kind() != GuiInputKind.single_file)
         self.batch_pattern_field.setEnabled(self._current_input_kind() == GuiInputKind.directory)
+
+    def open_settings_dialog(self) -> GuiDisplayPreferences | None:
+        dialog = SettingsDialog(self, preferences=self._display_preferences)
+        if dialog.exec() == dialog.DialogCode.Accepted:
+            return dialog.selected_preferences()
+        return None
+
+    def open_about_dialog(self) -> None:
+        dialog = AboutDialog(self, app_name=APP_DISPLAY_NAME, preferences=self._display_preferences)
+        dialog.exec()
+
+    def reset_to_default_configuration(self) -> None:
+        self.set_settings(GuiConversionSettings())
 
     def current_settings(self) -> GuiConversionSettings:
         return GuiConversionSettings(
