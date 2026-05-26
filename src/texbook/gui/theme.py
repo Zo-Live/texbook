@@ -370,9 +370,25 @@ def build_fluent_stylesheet(
         border-radius: 4px;
     }}
 
-    QScrollArea,
-        QWidget#settingsPane,
-        QWidget#taskListBody {{
+    QScrollArea#taskListScrollArea {{
+        background: {token["surface"]};
+        border: none;
+    }}
+
+    QScrollArea#taskListScrollArea QWidget#taskListViewport {{
+        background: {token["surface"]};
+    }}
+
+    QWidget#taskListBody {{
+        background: {token["surface"]};
+        border: none;
+    }}
+
+    QWidget#taskRowsContainer {{
+        background: {token["surface"]};
+    }}
+
+    QWidget#settingsPane {{
         background: transparent;
         border: none;
     }}

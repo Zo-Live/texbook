@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QScrollArea,
     QPushButton,
     QSpinBox,
     QToolButton,
@@ -255,6 +256,8 @@ def test_gui_dark_stylesheet_covers_dialog_and_choice_groups():
     assert "QDialog QLabel" in stylesheet
     assert "QMessageBox QLabel" in stylesheet
     assert 'QWidget[choiceGroup="true"]:disabled QCheckBox' in stylesheet
+    assert "QScrollArea#taskListScrollArea" in stylesheet
+    assert "QWidget#taskRowsContainer" in stylesheet
 
 
 def test_main_window_has_basic_lifecycle_shell():
@@ -1176,6 +1179,33 @@ def test_conversion_panel_single_pdf_and_output_directory_enable_add_task(monkey
     app.quit()
 
 
+def test_conversion_panel_add_task_clears_input_and_output_paths(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+
+    panel.set_input_selection(GuiInputSelection.from_single_file(r"C:\books\lecture.pdf"))
+    panel.set_output_directory(r"D:\tex-output\lecture.tex")
+
+    assert panel.current_path_memory().last_input_directory == r"C:\books"
+    assert panel.current_path_memory().last_output_directory == r"D:\tex-output"
+
+    panel.findChild(QPushButton, "addTaskButton").click()
+
+    assert panel.findChild(QLineEdit, "pdfInputField").text() == ""
+    assert panel.findChild(QLineEdit, "outputDirectoryField").text() == ""
+    assert panel.selection_state.input_selection.paths == ()
+    assert panel.selection_state.output_directory == ""
+    assert panel.current_path_memory().last_input_directory == r"C:\books"
+    assert panel.current_path_memory().last_output_directory == r"D:\tex-output"
+    assert panel.findChild(QPushButton, "addTaskButton").isEnabled() is False
+    assert panel.findChild(QPushButton, "startButton").isEnabled() is True
+
+    panel.close()
+    app.quit()
+
+
 def test_conversion_panel_uses_default_directory_for_first_input_dialog(monkeypatch):
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
@@ -1942,6 +1972,7 @@ def test_conversion_panel_adds_visual_task_rows_and_updates_progress(monkeypatch
     assert panel.findChild(QLabel, f"taskCacheLabel_{states[0].task_id}").text() == "缓存命中 0"
     assert panel.findChild(QLabel, f"taskRetryLabel_{states[0].task_id}").text() == "重试 0"
     assert panel.findChild(QLabel, "taskEmptyStatusLabel").text() == "已创建 2 个任务"
+    assert panel.findChild(QToolButton, "clearTasksButton").isEnabled() is True
     assert panel.findChild(QPushButton, "startButton").isEnabled() is True
 
     first_id = states[0].task_id
@@ -1975,6 +2006,32 @@ def test_conversion_panel_adds_visual_task_rows_and_updates_progress(monkeypatch
     assert panel.findChild(QLabel, f"taskStatusBadge_{states[1].task_id}").text() == "失败"
     assert panel.findChild(QLabel, f"taskResultLabel_{states[1].task_id}").text() == "失败原因：LLM failed"
     assert panel.findChild(QProgressBar, "overallProgressBar").value() == 70
+
+    window.close()
+    app.quit()
+
+
+def test_conversion_panel_clear_tasks_button_empties_queue(monkeypatch):
+    monkeypatch.setenv("TEXBOOK_MODEL", "model")
+    monkeypatch.setenv("TEXBOOK_API_KEY", "key")
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+
+    panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
+    panel.set_output_directory("out")
+    panel.findChild(QPushButton, "addTaskButton").click()
+    assert len(panel.task_view_states()) == 2
+    assert panel.findChild(QToolButton, "clearTasksButton").isEnabled() is True
+
+    panel.findChild(QToolButton, "clearTasksButton").click()
+
+    assert panel.task_view_states() == ()
+    assert panel.findChild(QToolButton, "clearTasksButton").isEnabled() is False
+    assert panel.findChild(QPushButton, "startButton").isEnabled() is False
+    assert panel.findChild(QLabel, "taskEmptyStatusLabel").text() == "队列空闲"
+    assert panel.findChild(QScrollArea, "taskListScrollArea").isVisible() is False
 
     window.close()
     app.quit()

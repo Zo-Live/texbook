@@ -662,6 +662,17 @@ class ConversionMainPanel(QWidget):
             metrics.addWidget(metric, index // 2, index % 2)
         panel.body_layout.addLayout(metrics)
 
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.addStretch(1)
+        self.clear_tasks_button = self._make_icon_button(
+            "clearTasksButton",
+            QStyle.StandardPixmap.SP_TrashIcon,
+            self._tr("button.clear_tasks.tooltip"),
+        )
+        actions.addWidget(self.clear_tasks_button)
+        panel.body_layout.addLayout(actions)
+
         body = QWidget(panel)
         body.setObjectName("taskListBody")
         body_layout = QVBoxLayout(body)
@@ -701,6 +712,7 @@ class ConversionMainPanel(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setVisible(False)
+        scroll.viewport().setObjectName("taskListViewport")
         self.task_list_scroll_area = scroll
 
         rows = QWidget(scroll)
@@ -773,6 +785,7 @@ class ConversionMainPanel(QWidget):
         self.reset_defaults_button.clicked.connect(
             lambda _checked=False: self.reset_defaults_requested.emit()
         )
+        self.clear_tasks_button.clicked.connect(self.clear_task_queue)
         self.input_type_choices.value_changed.connect(self._change_input_kind)
         self.output_kind_choices.value_changed.connect(self._sync_gui_state)
         self.batch_pattern_field.textChanged.connect(self._sync_gui_state)
@@ -920,6 +933,7 @@ class ConversionMainPanel(QWidget):
         self.add_task_button.setToolTip(self._tr("button.add_task.tooltip"))
         self.start_button.setText(self._tr("button.start"))
         self.start_button.setToolTip(self._tr("button.start.tooltip"))
+        self.clear_tasks_button.setToolTip(self._tr("button.clear_tasks.tooltip"))
 
         for key, section in self._sections.items():
             section.set_title(self._tr(key))
@@ -1049,12 +1063,13 @@ class ConversionMainPanel(QWidget):
         """Return current dialog path memory."""
         return self.path_memory
 
-    def _refresh_path_state(self) -> None:
+    def _refresh_path_state(self, *, publish_status: bool = True) -> None:
         self.pdf_input_field.setText(self.selection_state.input_selection.display_text(self._language))
         self.output_directory_field.setText(self.selection_state.output_directory)
         self._refresh_mode_controls()
         self._refresh_action_state()
-        self._publish_status_message(self._status_message())
+        if publish_status:
+            self._publish_status_message(self._status_message())
 
     def _status_message(self) -> str:
         has_input = self.selection_state.input_selection.is_valid
@@ -1172,6 +1187,7 @@ class ConversionMainPanel(QWidget):
             and self.selection_state.can_add_task
             and not validate_gui_settings(settings, language=self._language)
         )
+        self.clear_tasks_button.setEnabled(not is_running and bool(self._task_states))
         self.start_button.setEnabled(
             not is_running
             and any(state.status == GuiTaskStatus.pending for state in self._task_states.values())
@@ -1321,6 +1337,8 @@ class ConversionMainPanel(QWidget):
         self.tasks.extend(new_tasks)
         for task in new_tasks:
             self._task_states[task.task_id] = create_task_view_state(task)
+        self._clear_path_selection_after_task_creation()
+        self._refresh_path_state(publish_status=False)
         self._refresh_task_summary()
         self._publish_status_message(self._tr("status.tasks_added", count=len(new_tasks)))
 
@@ -1374,6 +1392,17 @@ class ConversionMainPanel(QWidget):
             self._executor.cancel_task(task_id)
         self._refresh_task_summary()
         self._publish_status_message(self._tr("status.canceling"))
+
+    def clear_task_queue(self) -> None:
+        """Clear all queued tasks while the executor is idle."""
+        if self._executor is not None:
+            return
+        if not self.tasks and not self._task_states:
+            return
+        self.tasks.clear()
+        self._task_states.clear()
+        self._refresh_task_summary()
+        self._publish_status_message(self._tr("status.tasks_cleared"))
 
     def task_view_states(self) -> tuple[GuiTaskViewState, ...]:
         """Return current task display states in queue order."""
@@ -1675,3 +1704,10 @@ class ConversionMainPanel(QWidget):
             self._executor.shutdown()
             self._executor.deleteLater()
             self._executor = None
+
+    def _clear_path_selection_after_task_creation(self) -> None:
+        """Reset only the active input/output selection after queue creation."""
+        self.selection_state = GuiPathSelectionState(
+            input_selection=GuiInputSelection.empty(self._current_input_kind()),
+            output_directory="",
+        )
