@@ -77,6 +77,7 @@ from texbook.gui.tasks import (  # noqa: E402
     mark_task_failed,
     mark_task_running,
 )
+from texbook.gui.widgets import ComboPopupItemDelegate  # noqa: E402
 from texbook.llm.scheduler import ProgressEvent  # noqa: E402
 from texbook.llm.pipeline import LLMConversionResult  # noqa: E402
 from texbook.output_options import BeamerBoxStyle, CtexFontProfile  # noqa: E402
@@ -213,11 +214,17 @@ def _assert_combo_popup_style(combo: QComboBox, *, surface: str, text: str) -> N
     try:
         view = combo.view()
         popup_window = view.window()
+        delegate = view.itemDelegate()
 
         assert surface in view.styleSheet()
         assert text in view.styleSheet()
         assert view.palette().color(QPalette.ColorRole.Text).name() == text
         assert view.viewport().palette().color(QPalette.ColorRole.Base).name() == surface
+        assert isinstance(delegate, ComboPopupItemDelegate)
+        assert delegate._popup_style is not None
+        assert delegate._popup_style.background.name() == surface
+        assert delegate._popup_style.text.name() == text
+        assert delegate._popup_style.selected_text.name() == "#ffffff"
         if popup_window is not combo.window():
             assert surface in popup_window.styleSheet()
             assert popup_window.palette().color(QPalette.ColorRole.Window).name() == surface

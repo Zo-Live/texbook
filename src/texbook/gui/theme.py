@@ -91,6 +91,13 @@ class ComboPopupStyle:
     window_stylesheet: str
     view_stylesheet: str
     palette: QPalette
+    background: QColor
+    hover_background: QColor
+    selected_background: QColor
+    text: QColor
+    hover_text: QColor
+    selected_text: QColor
+    disabled_text: QColor
 
 
 def build_fluent_stylesheet(
@@ -439,17 +446,30 @@ def build_combo_popup_style(
     base_point_size = coerce_font_point_size(font_point_size)
     font_family_stack = f'"{font_family}", "Microsoft YaHei UI", "Segoe UI", sans-serif'
 
+    background = QColor(token["surface"])
+    hover_background = QColor(token["hover"])
+    selected_background = QColor(token["accent"])
+    text = QColor(token["text"])
+    hover_text = QColor(token["text_strong"])
+    selected_text = QColor("#ffffff")
+    disabled_text = QColor(token["disabled_text"])
+
     palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(token["surface"]))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(token["text"]))
-    palette.setColor(QPalette.ColorRole.Base, QColor(token["surface"]))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(token["surface_soft"]))
-    palette.setColor(QPalette.ColorRole.Text, QColor(token["text"]))
-    palette.setColor(QPalette.ColorRole.Button, QColor(token["surface"]))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor(token["text"]))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(token["accent"]))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
-    palette.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
+    for group in (
+        QPalette.ColorGroup.Active,
+        QPalette.ColorGroup.Inactive,
+        QPalette.ColorGroup.Disabled,
+    ):
+        palette.setColor(group, QPalette.ColorRole.Window, background)
+        palette.setColor(group, QPalette.ColorRole.WindowText, text)
+        palette.setColor(group, QPalette.ColorRole.Base, background)
+        palette.setColor(group, QPalette.ColorRole.AlternateBase, QColor(token["surface_soft"]))
+        palette.setColor(group, QPalette.ColorRole.Text, disabled_text if group == QPalette.ColorGroup.Disabled else text)
+        palette.setColor(group, QPalette.ColorRole.Button, background)
+        palette.setColor(group, QPalette.ColorRole.ButtonText, disabled_text if group == QPalette.ColorGroup.Disabled else text)
+        palette.setColor(group, QPalette.ColorRole.Highlight, selected_background)
+        palette.setColor(group, QPalette.ColorRole.HighlightedText, selected_text)
+        palette.setColor(group, QPalette.ColorRole.BrightText, selected_text)
 
     return ComboPopupStyle(
         window_stylesheet=f"""
@@ -493,4 +513,11 @@ def build_combo_popup_style(
     }}
         """,
         palette=palette,
+        background=background,
+        hover_background=hover_background,
+        selected_background=selected_background,
+        text=text,
+        hover_text=hover_text,
+        selected_text=selected_text,
+        disabled_text=disabled_text,
     )

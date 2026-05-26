@@ -14,6 +14,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
     QSpinBox,
+    QStyle,
+    QStyleOptionViewItem,
+    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
@@ -172,16 +175,75 @@ def close_combo_popups(root: QWidget | None = None, *, exclude: QComboBox | None
                 widget.close()
 
 
-class FocusWheelComboBox(QComboBox):
-    """Combo box that never changes value from mouse wheel scrolling."""
+class ComboPopupItemDelegate(QStyledItemDelegate):
+    """Paint combo popup items with explicit theme colors."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._popup_style: ComboPopupStyle | None = None
 
     def set_popup_style(self, style: ComboPopupStyle) -> None:
+        """Update colors used when painting popup list items."""
+        self._popup_style = style
+
+    def paint(self, painter, option, index) -> None:  # type: ignore[override]
+        if self._popup_style is None:
+            super().paint(painter, option, index)
+            return
+
+        item_option = QStyleOptionViewItem(option)
+        self.initStyleOption(item_option, index)
+
+        selected = bool(item_option.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(item_option.state & QStyle.StateFlag.State_MouseOver)
+        enabled = bool(item_option.state & QStyle.StateFlag.State_Enabled)
+
+        background = self._popup_style.background
+        foreground = self._popup_style.text
+        if selected:
+            background = self._popup_style.selected_background
+            foreground = self._popup_style.selected_text
+        elif hovered:
+            background = self._popup_style.hover_background
+            foreground = self._popup_style.hover_text
+        if not enabled:
+            foreground = self._popup_style.disabled_text
+
+        painter.save()
+        painter.fillRect(item_option.rect, background)
+        painter.setPen(foreground)
+        painter.setFont(item_option.font)
+        text_rect = item_option.rect.adjusted(10, 0, -10, 0)
+        text = item_option.fontMetrics.elidedText(
+            item_option.text,
+            Qt.TextElideMode.ElideRight,
+            max(0, text_rect.width()),
+        )
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            text,
+        )
+        painter.restore()
+
+    def sizeHint(self, option, index):  # type: ignore[override]
+        size = super().sizeHint(option, index)
+        size.setHeight(max(size.height(), option.fontMetrics.height() + 12))
+        return size
+
+
+class FocusWheelComboBox(QComboBox):
+    """Combo box that never changes value from mouse wheel scrolling."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._popup_style: ComboPopupStyle | None = None
+        self._popup_delegate = ComboPopupItemDelegate(self)
+
+    def set_popup_style(self, style: ComboPopupStyle) -> None:
         """Store and apply the direct popup style used by detached Qt popup windows."""
         self._popup_style = style
+        self._popup_delegate.set_popup_style(style)
         self._apply_popup_style()
 
     def _apply_popup_style(self) -> None:
@@ -194,6 +256,7 @@ class FocusWheelComboBox(QComboBox):
         palette = QPalette(self._popup_style.palette)
         view.setStyleSheet(self._popup_style.view_stylesheet)
         view.setPalette(palette)
+        view.setItemDelegate(self._popup_delegate)
         view.setAutoFillBackground(True)
         view.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
