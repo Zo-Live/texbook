@@ -22,6 +22,7 @@ from texbook.gui.display import (
     GuiDisplayPreferences,
 )
 from texbook.gui.i18n import tr
+from texbook.gui.theme import build_combo_popup_style
 from texbook.gui.widgets import FocusWheelComboBox, FocusWheelSpinBox
 
 
@@ -104,6 +105,13 @@ class SettingsDialog(QDialog):
         self.font_family_combo.setObjectName("settingsFontFamilyCombo")
         self.font_family_combo.addItems(self._font_candidates())
         self.font_family_combo.setCurrentText(preferences.font_family)
+        self.font_family_combo.set_popup_style(
+            build_combo_popup_style(
+                self._preferences.theme,
+                font_family=self._preferences.font_family,
+                font_point_size=self._preferences.font_point_size,
+            )
+        )
         form.addRow(tr(self._preferences.language, "dialog.settings.font_family"), self.font_family_combo)
 
         self.font_point_size_spin = FocusWheelSpinBox(self)

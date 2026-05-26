@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from PySide6.QtGui import QColor, QPalette
+
 from texbook.gui.display import GuiThemeMode, coerce_font_point_size
 
 
@@ -78,6 +82,15 @@ _DARK_TOKENS = {
     "failed_bg": "#4a1f23",
     "failed_text": "#ffabb0",
 }
+
+
+@dataclass(frozen=True)
+class ComboPopupStyle:
+    """Direct style tokens for a combo-box popup window and its view."""
+
+    window_stylesheet: str
+    view_stylesheet: str
+    palette: QPalette
 
 
 def build_fluent_stylesheet(
@@ -403,9 +416,81 @@ def build_fluent_stylesheet(
     }}
 
     QScrollArea,
-    QWidget#settingsPane,
-    QWidget#taskListBody {{
+        QWidget#settingsPane,
+        QWidget#taskListBody {{
         background: transparent;
         border: none;
     }}
     """
+
+
+def build_combo_popup_style(
+    theme: GuiThemeMode | str = GuiThemeMode.light,
+    *,
+    font_family: str = "Microsoft YaHei UI",
+    font_point_size: int = 11,
+) -> ComboPopupStyle:
+    """Return popup-specific styling that can be applied directly to combo popups."""
+    try:
+        theme_mode = GuiThemeMode(theme)
+    except ValueError:
+        theme_mode = GuiThemeMode.light
+    token = _DARK_TOKENS if theme_mode == GuiThemeMode.dark else _LIGHT_TOKENS
+    base_point_size = coerce_font_point_size(font_point_size)
+    font_family_stack = f'"{font_family}", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(token["surface"]))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(token["text"]))
+    palette.setColor(QPalette.ColorRole.Base, QColor(token["surface"]))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(token["surface_soft"]))
+    palette.setColor(QPalette.ColorRole.Text, QColor(token["text"]))
+    palette.setColor(QPalette.ColorRole.Button, QColor(token["surface"]))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(token["text"]))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(token["accent"]))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
+
+    return ComboPopupStyle(
+        window_stylesheet=f"""
+    QFrame {{
+        background: {token["surface"]};
+        border: 1px solid {token["border_strong"]};
+        border-radius: 6px;
+    }}
+        """,
+        view_stylesheet=f"""
+    QAbstractItemView,
+    QListView {{
+        background: {token["surface"]};
+        color: {token["text"]};
+        border: none;
+        outline: none;
+        padding: 4px;
+        selection-background-color: {token["accent"]};
+        selection-color: #ffffff;
+        font-family: {font_family_stack};
+        font-size: {base_point_size}pt;
+    }}
+
+    QAbstractItemView::item,
+    QListView::item {{
+        min-height: 26px;
+        padding: 6px 10px;
+        color: {token["text"]};
+    }}
+
+    QAbstractItemView::item:hover,
+    QListView::item:hover {{
+        background: {token["hover"]};
+        color: {token["text_strong"]};
+    }}
+
+    QAbstractItemView::item:selected,
+    QListView::item:selected {{
+        background: {token["accent"]};
+        color: #ffffff;
+    }}
+        """,
+        palette=palette,
+    )

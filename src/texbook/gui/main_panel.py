@@ -85,7 +85,7 @@ from texbook.gui.widgets import (
     OptionGrid,
     SectionPanel,
 )
-from texbook.gui.theme import build_fluent_stylesheet
+from texbook.gui.theme import build_combo_popup_style, build_fluent_stylesheet
 from texbook.llm.scheduler import ProgressEvent
 
 
@@ -903,6 +903,13 @@ class ConversionMainPanel(QWidget):
                 font_point_size=self._display_preferences.font_point_size,
             )
         )
+        popup_style = build_combo_popup_style(
+            self._theme,
+            font_family=self._display_preferences.font_family,
+            font_point_size=self._display_preferences.font_point_size,
+        )
+        for combo_box in self.findChildren(FocusWheelComboBox):
+            combo_box.set_popup_style(popup_style)
 
     def _retranslate_ui(self) -> None:
         self.subtitle_label.setText(self._tr("command.subtitle"))

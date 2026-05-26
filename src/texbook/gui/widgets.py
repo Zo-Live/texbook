@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QWheelEvent
+from PySide6.QtGui import QPalette, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from texbook.gui.theme import ComboPopupStyle
 
 
 class SectionPanel(QFrame):
@@ -173,9 +175,45 @@ def close_combo_popups(root: QWidget | None = None, *, exclude: QComboBox | None
 class FocusWheelComboBox(QComboBox):
     """Combo box that never changes value from mouse wheel scrolling."""
 
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._popup_style: ComboPopupStyle | None = None
+
+    def set_popup_style(self, style: ComboPopupStyle) -> None:
+        """Store and apply the direct popup style used by detached Qt popup windows."""
+        self._popup_style = style
+        self._apply_popup_style()
+
+    def _apply_popup_style(self) -> None:
+        if self._popup_style is None:
+            return
+        view = self.view()
+        if view is None:
+            return
+
+        palette = QPalette(self._popup_style.palette)
+        view.setStyleSheet(self._popup_style.view_stylesheet)
+        view.setPalette(palette)
+        view.setAutoFillBackground(True)
+        view.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+        viewport = view.viewport()
+        if viewport is not None:
+            viewport.setPalette(QPalette(self._popup_style.palette))
+            viewport.setAutoFillBackground(True)
+
+        popup_window = view.window()
+        if popup_window is not None and popup_window is not self.window():
+            popup_window.setStyleSheet(self._popup_style.window_stylesheet)
+            popup_window.setPalette(QPalette(self._popup_style.palette))
+            popup_window.setAutoFillBackground(True)
+            popup_window.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
     def showPopup(self) -> None:
         close_combo_popups(self.window(), exclude=self)
+        self._apply_popup_style()
         super().showPopup()
+        self._apply_popup_style()
 
     def hidePopup(self) -> None:
         super().hidePopup()

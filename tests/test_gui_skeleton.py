@@ -12,6 +12,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QSettings, Qt  # noqa: E402
+from PySide6.QtGui import QPalette  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QCheckBox,
@@ -207,6 +208,23 @@ class _FakeWheelEvent:
         self.ignored = True
 
 
+def _assert_combo_popup_style(combo: QComboBox, *, surface: str, text: str) -> None:
+    combo.showPopup()
+    try:
+        view = combo.view()
+        popup_window = view.window()
+
+        assert surface in view.styleSheet()
+        assert text in view.styleSheet()
+        assert view.palette().color(QPalette.ColorRole.Text).name() == text
+        assert view.viewport().palette().color(QPalette.ColorRole.Base).name() == surface
+        if popup_window is not combo.window():
+            assert surface in popup_window.styleSheet()
+            assert popup_window.palette().color(QPalette.ColorRole.Window).name() == surface
+    finally:
+        combo.hidePopup()
+
+
 def test_icon_resource_resolves_to_docs_icon():
     assert resolve_app_icon_path() == ROOT / "docs" / "icon.ico"
 
@@ -252,6 +270,44 @@ def test_gui_dark_stylesheet_covers_combo_popup_list():
     assert "QDialog#settingsDialog" in stylesheet
     assert "QDialog QLabel" in stylesheet
     assert "QMessageBox QLabel" in stylesheet
+
+
+@pytest.mark.parametrize(
+    ("theme", "surface", "text"),
+    [
+        (GuiThemeMode.light, "#ffffff", "#1f2328"),
+        (GuiThemeMode.dark, "#24272d", "#edf1f7"),
+    ],
+)
+def test_combo_popup_gets_direct_theme_style(theme, surface, text):
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel(
+        display_preferences=GuiDisplayPreferences(theme=theme)
+    )
+    combo = panel.findChild(QComboBox, "outputKindCombo")
+
+    _assert_combo_popup_style(combo, surface=surface, text=text)
+
+    panel.close()
+    app.quit()
+
+
+def test_settings_dialog_font_combo_popup_gets_direct_theme_style():
+    app = create_application(["texbook-gui-test"])
+    dialog = SettingsDialog(
+        preferences=GuiDisplayPreferences(
+            theme=GuiThemeMode.dark,
+            language=GuiLanguage.zh_CN,
+            font_family="Segoe UI",
+            font_point_size=13,
+        )
+    )
+    combo = dialog.findChild(QComboBox, "settingsFontFamilyCombo")
+
+    _assert_combo_popup_style(combo, surface="#24272d", text="#edf1f7")
+
+    dialog.close()
+    app.quit()
 
 
 def test_main_window_has_basic_lifecycle_shell():
