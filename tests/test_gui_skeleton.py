@@ -821,6 +821,30 @@ def test_conversion_panel_option_dependencies_follow_mode_cache_and_image_format
     app.quit()
 
 
+def test_beamer_title_page_option_is_editable_for_auto_and_beamer_document_classes():
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+    checkbox = panel.findChild(QCheckBox, "beamerTitlePageCheckBox")
+    assert checkbox is not None
+
+    expected_enabled = {
+        "auto": True,
+        "ctexart": False,
+        "ctexbook": False,
+        "ctexbeamer": True,
+        "article": False,
+        "book": False,
+        "beamer": True,
+    }
+
+    for document_class, enabled in expected_enabled.items():
+        _set_choice(panel, "documentClassChoices", document_class)
+        assert checkbox.isEnabled() is enabled
+
+    panel.close()
+    app.quit()
+
+
 def test_conversion_panel_batch_pattern_only_validates_for_directory_input():
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()

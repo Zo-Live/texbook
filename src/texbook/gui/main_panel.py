@@ -1179,7 +1179,9 @@ class ConversionMainPanel(QWidget):
         single_input = self._current_input_kind() == GuiInputKind.single_file
         self.manual_title_field.setEnabled(single_input and self.title_source_choices.value() != "llm")
         self.show_date_checkbox.setEnabled(True)
-        self.beamer_title_page_checkbox.setEnabled(self.document_class_choices.value() in {"beamer", "ctexbeamer"})
+        self.beamer_title_page_checkbox.setEnabled(
+            self.document_class_choices.value() in {"auto", "beamer", "ctexbeamer"}
+        )
 
         project_mode = self._current_output_kind() == GuiOutputKind.project
         self.structure_mode_choices.setEnabled(project_mode)
