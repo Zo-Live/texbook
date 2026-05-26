@@ -11,7 +11,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings  # noqa: E402
+from PySide6.QtCore import QEvent, QSettings  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QCheckBox,
@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 from texbook.convert import LatexProjectResult  # noqa: E402
 from texbook.document_class import DocumentClassMode  # noqa: E402
-from texbook.gui.app import create_application  # noqa: E402
+from texbook.gui.app import GUI_BASE_FONT_POINT_SIZE, create_application  # noqa: E402
 from texbook.gui.core_adapter import GuiCoreAdapterError, build_core_conversion_bundle  # noqa: E402
 from texbook.gui.display import GuiDisplayPreferences, GuiLanguage, GuiThemeMode  # noqa: E402
 from texbook.gui.executor import (  # noqa: E402
@@ -64,6 +64,7 @@ from texbook.gui.settings import (  # noqa: E402
     GuiOutputKind,
     validate_gui_settings,
 )
+from texbook.gui.theme import build_fluent_stylesheet  # noqa: E402
 from texbook.gui.tasks import (  # noqa: E402
     GuiTaskRuntimeUpdate,
     GuiTaskStage,
@@ -188,6 +189,16 @@ class _FakeSignal:
             slot(*args)
 
 
+class PopupTrackingComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.hide_popup_calls = 0
+
+    def hidePopup(self):
+        self.hide_popup_calls += 1
+        super().hidePopup()
+
+
 def test_icon_resource_resolves_to_docs_icon():
     assert resolve_app_icon_path() == ROOT / "docs" / "icon.ico"
 
@@ -206,8 +217,19 @@ def test_create_application_sets_metadata():
     assert app.applicationName() == APP_DISPLAY_NAME
     assert app.organizationName() == APP_ORGANIZATION_NAME
     assert not app.windowIcon().isNull()
+    assert app.font().pointSize() == GUI_BASE_FONT_POINT_SIZE
+    assert "Microsoft YaHei UI" in app.font().families()
 
     app.quit()
+
+
+def test_gui_stylesheet_uses_application_font_without_small_body_px():
+    stylesheet = build_fluent_stylesheet(GuiThemeMode.light)
+
+    assert "font-size: 13px" not in stylesheet
+    assert "font-size: 17pt" in stylesheet
+    assert "font-size: 12pt" in stylesheet
+    assert "min-height: 28px" in stylesheet
 
 
 def test_main_window_has_basic_lifecycle_shell():
@@ -220,6 +242,29 @@ def test_main_window_has_basic_lifecycle_shell():
     assert isinstance(window.centralWidget(), ConversionMainPanel)
     assert window.menuBar().actions()
     assert window.statusBar().currentMessage() == "请选择 PDF 输入和产物目录"
+
+    window.close()
+    app.quit()
+
+
+def test_main_window_closes_combo_popups_on_state_changes():
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    panel = window.centralWidget()
+    assert isinstance(panel, ConversionMainPanel)
+    combo = PopupTrackingComboBox(panel)
+
+    panel.close_popups()
+
+    assert combo.hide_popup_calls == 1
+
+    window.changeEvent(QEvent(QEvent.Type.WindowStateChange))
+
+    assert combo.hide_popup_calls == 2
+
+    window.changeEvent(QEvent(QEvent.Type.ActivationChange))
+
+    assert combo.hide_popup_calls == 3
 
     window.close()
     app.quit()

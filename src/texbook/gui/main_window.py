@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QEvent, QSize
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
 from PySide6.QtWidgets import QMainWindow
 
@@ -90,7 +90,23 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _close_panel_popups(self) -> None:
+        panel = self.centralWidget()
+        close_popups = getattr(panel, "close_popups", None)
+        if callable(close_popups):
+            close_popups()
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() in {
+            QEvent.Type.WindowStateChange,
+            QEvent.Type.ActivationChange,
+            QEvent.Type.Hide,
+        }:
+            self._close_panel_popups()
+        super().changeEvent(event)
+
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._close_panel_popups()
         self._save_gui_state()
         panel = self.centralWidget()
         close_executor = getattr(panel, "close_executor", None)

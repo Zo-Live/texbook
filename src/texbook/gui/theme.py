@@ -94,7 +94,6 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         background: {token["window_bg"]};
         color: {token["text"]};
         font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
-        font-size: 13px;
     }}
 
     QMenuBar,
@@ -156,7 +155,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
 
     QLabel#appTitleLabel {{
         color: {token["text_strong"]};
-        font-size: 20px;
+        font-size: 17pt;
         font-weight: 700;
     }}
 
@@ -167,7 +166,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
 
     QLabel[sectionTitle="true"] {{
         color: {token["text_strong"]};
-        font-size: 15px;
+        font-size: 12pt;
         font-weight: 700;
     }}
 
@@ -180,7 +179,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         background: {token["pending_bg"]};
         color: {token["pending_text"]};
         border-radius: 6px;
-        padding: 3px 8px;
+        padding: 4px 9px;
         font-weight: 700;
     }}
 
@@ -188,7 +187,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         background: {token["running_bg"]};
         color: {token["running_text"]};
         border-radius: 6px;
-        padding: 3px 8px;
+        padding: 4px 9px;
         font-weight: 700;
     }}
 
@@ -196,7 +195,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         background: {token["canceling_bg"]};
         color: {token["canceling_text"]};
         border-radius: 6px;
-        padding: 3px 8px;
+        padding: 4px 9px;
         font-weight: 700;
     }}
 
@@ -204,7 +203,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         background: {token["canceled_bg"]};
         color: {token["canceled_text"]};
         border-radius: 6px;
-        padding: 3px 8px;
+        padding: 4px 9px;
         font-weight: 700;
     }}
 
@@ -212,7 +211,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         background: {token["completed_bg"]};
         color: {token["completed_text"]};
         border-radius: 6px;
-        padding: 3px 8px;
+        padding: 4px 9px;
         font-weight: 700;
     }}
 
@@ -220,7 +219,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         background: {token["failed_bg"]};
         color: {token["failed_text"]};
         border-radius: 6px;
-        padding: 3px 8px;
+        padding: 4px 9px;
         font-weight: 700;
     }}
 
@@ -233,13 +232,13 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         border: 1px solid {token["border_strong"]};
         border-radius: 6px;
         color: {token["text"]};
-        padding: 6px 9px;
-        min-height: 24px;
+        padding: 7px 10px;
+        min-height: 28px;
         selection-background-color: {token["accent"]};
     }}
 
     QTextEdit {{
-        min-height: 60px;
+        min-height: 72px;
     }}
 
     QLineEdit:focus,
@@ -253,7 +252,7 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
 
     QComboBox::drop-down {{
         border: none;
-        width: 24px;
+        width: 28px;
     }}
 
     QPushButton,
@@ -262,8 +261,8 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         border: 1px solid {token["border_strong"]};
         border-radius: 6px;
         color: {token["text"]};
-        padding: 6px 10px;
-        min-height: 26px;
+        padding: 7px 11px;
+        min-height: 30px;
     }}
 
     QPushButton:hover,

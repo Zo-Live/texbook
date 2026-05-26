@@ -787,6 +787,11 @@ class ConversionMainPanel(QWidget):
         """Return current theme and language preferences."""
         return self._display_preferences
 
+    def close_popups(self) -> None:
+        """Close transient combo-box popups owned by this panel."""
+        for combo_box in self.findChildren(QComboBox):
+            combo_box.hidePopup()
+
     def set_display_preferences(
         self,
         preferences: GuiDisplayPreferences,

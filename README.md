@@ -193,6 +193,13 @@ uv run texbook-gui
 uv run python -m texbook.gui
 ```
 
+如果同一份工作区同时在 WSL 和 Windows PowerShell 中使用，不要共用同一个 `.venv`。WSL 创建的虚拟环境会指向 Linux Python，并可能包含 Windows 无法清理的 `lib64` 符号链接；PowerShell 启动 GUI 时建议使用独立环境：
+
+```powershell
+$env:UV_PROJECT_ENVIRONMENT=".venv-win"
+uv run texbook-gui
+```
+
 GUI 使用 `docs/icon.ico` 作为应用图标，支持亮色模式、暗色模式和中文/English 界面切换，并会记忆这些显示偏好。基础 Windows 打包入口使用 PyInstaller：
 
 ```bash
