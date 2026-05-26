@@ -7,11 +7,23 @@ from texbook.gui.display import GuiLanguage
 
 _STRINGS: dict[GuiLanguage, dict[str, str]] = {
     GuiLanguage.zh_CN: {
-        "app.window_title": "TexBook PDF 转 LaTeX",
+        "app.window_title": "TeXBook PDF 转 LaTeX",
         "menu.file": "文件",
         "menu.exit": "退出",
         "menu.help": "帮助",
         "menu.about": "关于 {app_name}",
+        "dialog.about.title": "关于 {app_name}",
+        "dialog.about.text": (
+            "{app_name} 是面向中文数学讲义的 PDF 转 LaTeX 转换工具。"
+        ),
+        "dialog.about.informative": (
+            "基本流程：\n"
+            "1. 选择单个 PDF、多个 PDF 或 PDF 目录。\n"
+            "2. 选择输出 .tex 文件或目录化项目的目标位置。\n"
+            "3. 配置支持图片输入的 OpenAI-compatible 模型、Base URL 和 API Key。\n"
+            "4. 点击“添加任务”加入队列，再点击“开始转换”执行。\n\n"
+            "GUI 只负责转换任务和结果写盘，不负责 LaTeX 编译；如需生成 PDF，请在本地 TeX 环境中自行编译输出的 .tex。"
+        ),
         "status.ready": "就绪",
         "command.subtitle": "PDF 转 LaTeX 转换工具",
         "command.theme.light": "浅色",
@@ -209,11 +221,23 @@ _STRINGS: dict[GuiLanguage, dict[str, str]] = {
         "error.unknown_input_type": "未知输入类型：{label}",
     },
     GuiLanguage.en_US: {
-        "app.window_title": "TexBook PDF to LaTeX",
+        "app.window_title": "TeXBook PDF to LaTeX",
         "menu.file": "File",
         "menu.exit": "Exit",
         "menu.help": "Help",
         "menu.about": "About {app_name}",
+        "dialog.about.title": "About {app_name}",
+        "dialog.about.text": (
+            "{app_name} is a PDF to LaTeX conversion tool for Chinese math lecture notes."
+        ),
+        "dialog.about.informative": (
+            "Basic workflow:\n"
+            "1. Select one PDF, multiple PDFs, or a PDF folder.\n"
+            "2. Choose the output .tex file or project folder target.\n"
+            "3. Configure an OpenAI-compatible vision model, Base URL, and API Key.\n"
+            "4. Click Add Task to queue work, then Start to run pending tasks.\n\n"
+            "The GUI manages conversion tasks and writes results. It does not compile LaTeX; compile the generated .tex files in your local TeX environment when needed."
+        ),
         "status.ready": "Ready",
         "command.subtitle": "PDF to LaTeX converter",
         "command.theme.light": "Light",

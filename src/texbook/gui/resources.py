@@ -6,9 +6,9 @@ import sys
 from pathlib import Path
 
 
-APP_DISPLAY_NAME = "TexBook"
-APP_ORGANIZATION_NAME = "TexBook"
-APP_WINDOW_TITLE = "TexBook PDF 转 LaTeX"
+APP_DISPLAY_NAME = "TeXBook"
+APP_ORGANIZATION_NAME = "TeXBook"
+APP_WINDOW_TITLE = "TeXBook PDF 转 LaTeX"
 ICON_RELATIVE_PATH = Path("docs") / "icon.ico"
 
 

@@ -255,6 +255,33 @@ def build_fluent_stylesheet(theme: GuiThemeMode | str = GuiThemeMode.light) -> s
         width: 28px;
     }}
 
+    QComboBox QAbstractItemView {{
+        background: {token["surface"]};
+        color: {token["text"]};
+        border: 1px solid {token["border_strong"]};
+        border-radius: 6px;
+        outline: none;
+        padding: 4px;
+        selection-background-color: {token["accent"]};
+        selection-color: #ffffff;
+    }}
+
+    QComboBox QAbstractItemView::item {{
+        min-height: 26px;
+        padding: 6px 10px;
+        color: {token["text"]};
+    }}
+
+    QComboBox QAbstractItemView::item:hover {{
+        background: {token["hover"]};
+        color: {token["text_strong"]};
+    }}
+
+    QComboBox QAbstractItemView::item:selected {{
+        background: {token["accent"]};
+        color: #ffffff;
+    }}
+
     QPushButton,
     QToolButton {{
         background: {token["surface"]};

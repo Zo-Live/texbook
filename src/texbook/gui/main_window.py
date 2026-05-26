@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QSize
 from PySide6.QtGui import QAction, QCloseEvent, QIcon
-from PySide6.QtWidgets import QMainWindow
+from PySide6.QtWidgets import QMainWindow, QMessageBox
 
 from texbook.gui.display import GuiDisplayPreferences
 from texbook.gui.i18n import tr
@@ -52,7 +52,7 @@ class MainWindow(QMainWindow):
 
         self._help_menu = self.menuBar().addMenu("")
         self._about_action = QAction(self)
-        self._about_action.setEnabled(False)
+        self._about_action.triggered.connect(self._show_about_dialog)
         self._help_menu.addAction(self._about_action)
         self._retranslate_ui()
 
@@ -77,6 +77,17 @@ class MainWindow(QMainWindow):
         self._exit_action.setText(self._tr("menu.exit"))
         self._help_menu.setTitle(self._tr("menu.help"))
         self._about_action.setText(self._tr("menu.about", app_name=APP_DISPLAY_NAME))
+
+    def _show_about_dialog(self) -> None:
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle(self._tr("dialog.about.title", app_name=APP_DISPLAY_NAME))
+        message_box.setIcon(QMessageBox.Icon.Information)
+        message_box.setText(self._tr("dialog.about.text", app_name=APP_DISPLAY_NAME))
+        message_box.setInformativeText(
+            self._tr("dialog.about.informative", app_name=APP_DISPLAY_NAME)
+        )
+        message_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        message_box.exec()
 
     def _save_gui_state(self) -> None:
         panel = self.centralWidget()

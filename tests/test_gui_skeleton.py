@@ -232,6 +232,16 @@ def test_gui_stylesheet_uses_application_font_without_small_body_px():
     assert "min-height: 28px" in stylesheet
 
 
+def test_gui_dark_stylesheet_covers_combo_popup_list():
+    stylesheet = build_fluent_stylesheet(GuiThemeMode.dark)
+
+    assert "QComboBox QAbstractItemView" in stylesheet
+    assert "background: #24272d" in stylesheet
+    assert "color: #edf1f7" in stylesheet
+    assert "selection-background-color: #4aa3ff" in stylesheet
+    assert "selection-color: #ffffff" in stylesheet
+
+
 def test_main_window_has_basic_lifecycle_shell():
     app = create_application(["texbook-gui-test"])
     window = MainWindow()
@@ -242,6 +252,58 @@ def test_main_window_has_basic_lifecycle_shell():
     assert isinstance(window.centralWidget(), ConversionMainPanel)
     assert window.menuBar().actions()
     assert window.statusBar().currentMessage() == "请选择 PDF 输入和产物目录"
+
+    window.close()
+    app.quit()
+
+
+def test_main_window_about_action_shows_project_help(monkeypatch):
+    app = create_application(["texbook-gui-test"])
+    window = MainWindow()
+    captured = {}
+
+    class FakeMessageBox:
+        Icon = QMessageBox.Icon
+        StandardButton = QMessageBox.StandardButton
+
+        def __init__(self, parent=None):
+            captured["parent"] = parent
+
+        def setWindowTitle(self, text):
+            captured["title"] = text
+
+        def setIcon(self, icon):
+            captured["icon"] = icon
+
+        def setText(self, text):
+            captured["text"] = text
+
+        def setInformativeText(self, text):
+            captured["informative"] = text
+
+        def setStandardButtons(self, buttons):
+            captured["buttons"] = buttons
+
+        def exec(self):
+            captured["exec"] = True
+            return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr("texbook.gui.main_window.QMessageBox", FakeMessageBox)
+
+    help_menu_action = window.menuBar().actions()[1]
+    about_action = help_menu_action.menu().actions()[0]
+
+    assert about_action.isEnabled() is True
+    assert about_action.text() == "关于 TeXBook"
+
+    about_action.trigger()
+
+    assert captured["parent"] is window
+    assert captured["title"] == "关于 TeXBook"
+    assert "PDF 转 LaTeX" in captured["text"]
+    assert "添加任务" in captured["informative"]
+    assert "不负责 LaTeX 编译" in captured["informative"]
+    assert captured["exec"] is True
 
     window.close()
     app.quit()
@@ -651,7 +713,7 @@ def test_conversion_panel_theme_and_language_switch_keep_stable_values():
     panel.findChild(QToolButton, "languageButton").click()
 
     assert panel.current_display_preferences().language == GuiLanguage.en_US
-    assert window.windowTitle() == "TexBook PDF to LaTeX"
+    assert window.windowTitle() == "TeXBook PDF to LaTeX"
     assert panel.findChild(QPushButton, "addTaskButton").text() == "Add Task"
     assert panel.findChild(QComboBox, "inputTypeCombo").currentText() == "Folder Batch"
     assert panel.findChild(QComboBox, "inputTypeCombo").currentData() == GuiInputKind.directory.value
@@ -1098,7 +1160,7 @@ def test_main_window_restores_and_saves_display_preferences(tmp_path):
     panel = window.centralWidget()
     assert isinstance(panel, ConversionMainPanel)
 
-    assert window.windowTitle() == "TexBook PDF to LaTeX"
+    assert window.windowTitle() == "TeXBook PDF to LaTeX"
     assert panel.current_display_preferences().theme == GuiThemeMode.dark
     assert panel.current_display_preferences().language == GuiLanguage.en_US
     assert panel.findChild(QPushButton, "addTaskButton").text() == "Add Task"
