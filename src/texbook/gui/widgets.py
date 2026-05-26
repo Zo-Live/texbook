@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListView,
     QSizePolicy,
     QSpinBox,
     QStyle,
@@ -138,16 +139,11 @@ class MetricPill(QFrame):
 
 
 def close_combo_popup(combo_box: QComboBox) -> None:
-    """Hide a combo box popup and its transient top-level view if Qt created one."""
-    combo_box.hidePopup()
+    """Hide a combo box popup if it is currently visible."""
     view = combo_box.view()
-    if view is None:
+    if view is None or not view.isVisible():
         return
-    view.hide()
-    popup_window = view.window()
-    if popup_window is not None and popup_window is not combo_box.window():
-        popup_window.hide()
-        popup_window.close()
+    combo_box.hidePopup()
 
 
 def close_combo_popups(root: QWidget | None = None, *, exclude: QComboBox | None = None) -> None:
@@ -239,6 +235,11 @@ class FocusWheelComboBox(QComboBox):
         super().__init__(parent)
         self._popup_style: ComboPopupStyle | None = None
         self._popup_delegate = ComboPopupItemDelegate(self)
+        self._popup_view = QListView(self)
+        self._popup_view.setObjectName("comboPopupView")
+        self._popup_view.setItemDelegate(self._popup_delegate)
+        self._popup_view.setUniformItemSizes(False)
+        self.setView(self._popup_view)
 
     def set_popup_style(self, style: ComboPopupStyle) -> None:
         """Store and apply the direct popup style used by detached Qt popup windows."""
@@ -280,12 +281,6 @@ class FocusWheelComboBox(QComboBox):
 
     def hidePopup(self) -> None:
         super().hidePopup()
-        view = self.view()
-        if view is not None:
-            view.hide()
-            popup_window = view.window()
-            if popup_window is not None and popup_window is not self.window():
-                popup_window.hide()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         event.ignore()

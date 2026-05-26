@@ -11,8 +11,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QSettings, Qt  # noqa: E402
-from PySide6.QtGui import QPalette  # noqa: E402
+from PySide6.QtCore import QEvent, QRect, QSettings, Qt  # noqa: E402
+from PySide6.QtGui import QImage, QPainter, QPalette  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QCheckBox,
@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (  # noqa: E402
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QStyle,
+    QStyleOptionViewItem,
     QToolButton,
     QWidget,
 )
@@ -77,7 +79,7 @@ from texbook.gui.tasks import (  # noqa: E402
     mark_task_failed,
     mark_task_running,
 )
-from texbook.gui.widgets import ComboPopupItemDelegate  # noqa: E402
+from texbook.gui.widgets import ComboPopupItemDelegate, FocusWheelComboBox  # noqa: E402
 from texbook.llm.scheduler import ProgressEvent  # noqa: E402
 from texbook.llm.pipeline import LLMConversionResult  # noqa: E402
 from texbook.output_options import BeamerBoxStyle, CtexFontProfile  # noqa: E402
@@ -232,6 +234,33 @@ def _assert_combo_popup_style(combo: QComboBox, *, surface: str, text: str) -> N
         combo.hidePopup()
 
 
+def _assert_combo_delegate_paints_visible_text(combo: QComboBox, *, surface: str) -> None:
+    delegate = combo.view().itemDelegate()
+    assert isinstance(delegate, ComboPopupItemDelegate)
+    index = combo.model().index(0, combo.modelColumn(), combo.rootModelIndex())
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 220, 44)
+    option.state = QStyle.StateFlag.State_Enabled
+    option.font = combo.font()
+    option.palette = combo.view().palette()
+
+    image = QImage(option.rect.size(), QImage.Format.Format_ARGB32)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    try:
+        delegate.paint(painter, option, index)
+    finally:
+        painter.end()
+
+    background = image.pixelColor(0, 0).name()
+    assert background == surface
+    assert any(
+        image.pixelColor(x, y).name() != surface
+        for x in range(image.width())
+        for y in range(image.height())
+    )
+
+
 def test_icon_resource_resolves_to_docs_icon():
     assert resolve_app_icon_path() == ROOT / "docs" / "icon.ico"
 
@@ -294,6 +323,33 @@ def test_combo_popup_gets_direct_theme_style(theme, surface, text):
     combo = panel.findChild(QComboBox, "outputKindCombo")
 
     _assert_combo_popup_style(combo, surface=surface, text=text)
+    _assert_combo_delegate_paints_visible_text(combo, surface=surface)
+
+    panel.close()
+    app.quit()
+
+
+def test_combo_popup_view_stays_stable_across_theme_language_and_reopen():
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+    combo = panel.findChild(FocusWheelComboBox, "outputKindCombo")
+    popup_view = combo.view()
+
+    _assert_combo_popup_style(combo, surface="#ffffff", text="#1f2328")
+    combo.hidePopup()
+
+    panel.toggle_theme()
+    panel.toggle_language()
+
+    assert combo.view() is popup_view
+    _assert_combo_popup_style(combo, surface="#24272d", text="#edf1f7")
+    combo.hidePopup()
+    combo.showPopup()
+    try:
+        assert combo.view() is popup_view
+        assert combo.view().isVisible()
+    finally:
+        combo.hidePopup()
 
     panel.close()
     app.quit()
@@ -369,18 +425,32 @@ def test_main_window_closes_combo_popups_on_state_changes():
     panel = window.centralWidget()
     assert isinstance(panel, ConversionMainPanel)
     combo = PopupTrackingComboBox(panel)
+    combo.addItems(["one", "two"])
+    combo.show()
+    window.show()
 
     panel.close_popups()
 
+    assert combo.hide_popup_calls == 0
+
+    combo.showPopup()
+    panel.close_popups()
+
     assert combo.hide_popup_calls == 1
+
+    combo.showPopup()
 
     window.changeEvent(QEvent(QEvent.Type.WindowStateChange))
 
     assert combo.hide_popup_calls == 2
 
+    combo.showPopup()
+
     window.changeEvent(QEvent(QEvent.Type.ActivationChange))
 
     assert combo.hide_popup_calls == 3
+
+    combo.showPopup()
 
     window.changeEvent(QEvent(QEvent.Type.Hide))
 
