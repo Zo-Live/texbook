@@ -140,6 +140,24 @@ def build_fluent_stylesheet(
         color: {token["text"]};
     }}
 
+    QDialog QLabel,
+    QMessageBox QLabel {{
+        background: transparent;
+        color: {token["text"]};
+    }}
+
+    QDialog QLabel[muted="true"],
+    QMessageBox QLabel[muted="true"] {{
+        color: {token["muted"]};
+    }}
+
+    QDialog QPushButton,
+    QDialog QToolButton,
+    QMessageBox QPushButton {{
+        background: {token["surface"]};
+        color: {token["text"]};
+    }}
+
     QMessageBox {{
         background: {token["surface"]};
         color: {token["text"]};

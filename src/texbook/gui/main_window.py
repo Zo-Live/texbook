@@ -13,6 +13,7 @@ from texbook.gui.main_panel import ConversionMainPanel
 from texbook.gui.persistence import GuiPersistentState, GuiSettingsStore
 from texbook.gui.resources import APP_DISPLAY_NAME, resolve_app_icon_path
 from texbook.gui.theme import build_fluent_stylesheet
+from texbook.gui.widgets import close_combo_popups
 
 
 class MainWindow(QMainWindow):
@@ -141,13 +142,6 @@ class MainWindow(QMainWindow):
         if not isinstance(panel, ConversionMainPanel):
             return
         panel.reset_to_default_configuration()
-        panel.set_display_preferences(
-            GuiDisplayPreferences(
-                theme=self._display_preferences.theme,
-                language=self._display_preferences.language,
-            ),
-            emit=True,
-        )
 
     def _save_gui_state(self) -> None:
         panel = self.centralWidget()
@@ -163,18 +157,8 @@ class MainWindow(QMainWindow):
 
     def _close_panel_popups(self) -> None:
         panel = self.centralWidget()
-        close_popups = getattr(panel, "close_popups", None)
-        if callable(close_popups):
-            close_popups()
-        app = QApplication.instance()
-        if app is not None:
-            active_popup = app.activePopupWidget()
-            if active_popup is not None:
-                active_popup.close()
-            for widget in app.topLevelWidgets():
-                hide_popup = getattr(widget, "hidePopup", None)
-                if callable(hide_popup):
-                    hide_popup()
+        if isinstance(panel, ConversionMainPanel):
+            close_combo_popups(panel)
 
     def _close_transient_dialogs(self) -> None:
         for dialog in list(self._open_dialogs):

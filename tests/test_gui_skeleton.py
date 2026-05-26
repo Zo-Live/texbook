@@ -250,6 +250,8 @@ def test_gui_dark_stylesheet_covers_combo_popup_list():
     assert "selection-color: #ffffff" in stylesheet
     assert "QDialog#aboutDialog" in stylesheet
     assert "QDialog#settingsDialog" in stylesheet
+    assert "QDialog QLabel" in stylesheet
+    assert "QMessageBox QLabel" in stylesheet
 
 
 def test_main_window_has_basic_lifecycle_shell():
@@ -317,6 +319,10 @@ def test_main_window_closes_combo_popups_on_state_changes():
 
     assert combo.hide_popup_calls == 3
 
+    window.changeEvent(QEvent(QEvent.Type.Hide))
+
+    assert combo.hide_popup_calls == 4
+
     window.close()
     app.quit()
 
@@ -350,14 +356,38 @@ def test_settings_dialog_updates_font_preferences():
     app.quit()
 
 
-def test_scroll_sensitive_controls_ignore_wheel_without_focus():
+def test_settings_dialog_reset_button_resets_only_display_font_preferences():
+    app = create_application(["texbook-gui-test"])
+    dialog = SettingsDialog(
+        preferences=GuiDisplayPreferences(
+            theme=GuiThemeMode.dark,
+            language=GuiLanguage.zh_CN,
+            font_family="Arial",
+            font_point_size=15,
+        )
+    )
+
+    dialog.findChild(QPushButton, "settingsResetButton").click()
+    dialog._accept()
+    preferences = dialog.selected_preferences()
+
+    assert preferences.theme == GuiThemeMode.dark
+    assert preferences.language == GuiLanguage.zh_CN
+    assert preferences.font_family == "Microsoft YaHei UI"
+    assert preferences.font_point_size == GUI_BASE_FONT_POINT_SIZE
+
+    dialog.close()
+    app.quit()
+
+
+def test_scroll_sensitive_controls_always_ignore_wheel_changes():
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
     combo = panel.findChild(QComboBox, "outputKindCombo")
     spin = panel.findChild(QSpinBox, "chunkPagesSpinBox")
 
-    combo.clearFocus()
-    spin.clearFocus()
+    combo.setFocus()
+    spin.setFocus()
     combo_event = _FakeWheelEvent()
     spin_event = _FakeWheelEvent()
 
@@ -366,6 +396,19 @@ def test_scroll_sensitive_controls_ignore_wheel_without_focus():
 
     assert combo_event.ignored is True
     assert spin_event.ignored is True
+    assert combo.currentText() == "单个 .tex"
+    assert spin.value() == 4
+
+    combo.clearFocus()
+    spin.clearFocus()
+    second_combo_event = _FakeWheelEvent()
+    second_spin_event = _FakeWheelEvent()
+
+    combo.wheelEvent(second_combo_event)
+    spin.wheelEvent(second_spin_event)
+
+    assert second_combo_event.ignored is True
+    assert second_spin_event.ignored is True
     assert combo.currentText() == "单个 .tex"
     assert spin.value() == 4
 
@@ -855,8 +898,8 @@ def test_reset_defaults_keeps_theme_language_paths_and_tasks(monkeypatch):
     preferences = panel.current_display_preferences()
     assert preferences.theme == GuiThemeMode.dark
     assert preferences.language == GuiLanguage.en_US
-    assert preferences.font_family == "Microsoft YaHei UI"
-    assert preferences.font_point_size == GUI_BASE_FONT_POINT_SIZE
+    assert preferences.font_family == "Arial"
+    assert preferences.font_point_size == 14
     assert panel.current_path_memory().last_input_directory == r"C:\books"
     assert len(panel.task_view_states()) == 1
     assert panel.current_settings().pages == ""

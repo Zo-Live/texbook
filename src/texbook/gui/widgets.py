@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDoubleSpinBox,
     QFrame,
@@ -131,34 +132,76 @@ class MetricPill(QFrame):
         self.label_widget.setText(label)
 
 
+def close_combo_popup(combo_box: QComboBox) -> None:
+    """Hide a combo box popup and its transient top-level view if Qt created one."""
+    combo_box.hidePopup()
+    view = combo_box.view()
+    if view is None:
+        return
+    view.hide()
+    popup_window = view.window()
+    if popup_window is not None and popup_window is not combo_box.window():
+        popup_window.hide()
+        popup_window.close()
+
+
+def close_combo_popups(root: QWidget | None = None, *, exclude: QComboBox | None = None) -> None:
+    """Close combo-box popups under a root widget and any active Qt popup window."""
+    app = QApplication.instance()
+    combo_boxes: list[QComboBox] = root.findChildren(QComboBox) if root is not None else []
+
+    for combo_box in combo_boxes:
+        if combo_box is exclude:
+            continue
+        close_combo_popup(combo_box)
+
+    if app is None:
+        return
+
+    active_popup = app.activePopupWidget()
+    if active_popup is not None:
+        active_popup.hide()
+        active_popup.close()
+
+    if root is None:
+        for widget in app.topLevelWidgets():
+            if widget.windowFlags() & Qt.WindowType.Popup:
+                widget.hide()
+                widget.close()
+
+
 class FocusWheelComboBox(QComboBox):
-    """Combo box that ignores mouse wheel changes until it has focus."""
+    """Combo box that never changes value from mouse wheel scrolling."""
+
+    def showPopup(self) -> None:
+        close_combo_popups(self.window(), exclude=self)
+        super().showPopup()
+
+    def hidePopup(self) -> None:
+        super().hidePopup()
+        view = self.view()
+        if view is not None:
+            view.hide()
+            popup_window = view.window()
+            if popup_window is not None and popup_window is not self.window():
+                popup_window.hide()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        if not self.hasFocus():
-            event.ignore()
-            return
-        super().wheelEvent(event)
+        event.ignore()
 
 
 class FocusWheelSpinBox(QSpinBox):
-    """Spin box that ignores mouse wheel changes until it has focus."""
+    """Spin box that never changes value from mouse wheel scrolling."""
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        if not self.hasFocus():
-            event.ignore()
-            return
-        super().wheelEvent(event)
+        event.ignore()
 
 
 class FocusWheelDoubleSpinBox(QDoubleSpinBox):
-    """Double spin box that ignores mouse wheel changes until it has focus."""
+    """Double spin box that never changes value from mouse wheel scrolling."""
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        if not self.hasFocus():
-            event.ignore()
-            return
-        super().wheelEvent(event)
+        event.ignore()
 
 
 class FocusAwareWidget(QWidget):

@@ -47,6 +47,7 @@ class AboutDialog(QDialog):
         layout.addWidget(header)
 
         body = QLabel(tr(preferences.language, "dialog.about.text", app_name=app_name), self)
+        body.setProperty("muted", True)
         body.setWordWrap(True)
         layout.addWidget(body)
 
@@ -87,6 +88,7 @@ class SettingsDialog(QDialog):
         layout.setSpacing(14)
 
         intro = QLabel(tr(self._preferences.language, "dialog.settings.intro"), self)
+        intro.setProperty("muted", True)
         intro.setWordWrap(True)
         layout.addWidget(intro)
 

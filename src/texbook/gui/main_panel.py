@@ -76,6 +76,7 @@ from texbook.gui.tasks import (
     task_status_label,
 )
 from texbook.gui.widgets import (
+    close_combo_popups,
     FocusWheelComboBox,
     FocusWheelDoubleSpinBox,
     FocusWheelSpinBox,
@@ -832,8 +833,7 @@ class ConversionMainPanel(QWidget):
 
     def close_popups(self) -> None:
         """Close transient combo-box popups owned by this panel."""
-        for combo_box in self.findChildren(QComboBox):
-            combo_box.hidePopup()
+        close_combo_popups(self)
 
     def eventFilter(self, watched: object, event: object) -> bool:
         if isinstance(event, QEvent) and event.type() == QEvent.Type.MouseButtonPress:
@@ -1212,7 +1212,7 @@ class ConversionMainPanel(QWidget):
         dialog.exec()
 
     def reset_to_default_configuration(self) -> None:
-        self.set_settings(GuiConversionSettings())
+        self.reset_settings()
 
     def current_settings(self) -> GuiConversionSettings:
         return GuiConversionSettings(
@@ -1306,7 +1306,12 @@ class ConversionMainPanel(QWidget):
         self._refresh_path_state()
 
     def reset_settings(self) -> None:
+        current_preferences = self._display_preferences
         self.set_settings(GuiConversionSettings())
+        self._display_preferences = current_preferences
+        self._apply_theme()
+        self._retranslate_ui()
+        self._refresh_path_state()
 
     def validate_settings(self) -> list[str]:
         return validate_gui_settings(self.current_settings(), language=self._language)
