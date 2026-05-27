@@ -469,12 +469,6 @@ class ConversionMainPanel(QWidget):
         self._add_grid_row(grid, "field.key_source", api_key_source)
         grid.add_row("API Key", api_key)
 
-        preset = QLineEdit(panel)
-        preset.setObjectName("promptPresetField")
-        preset.setText("chinese-math")
-        self.prompt_preset_field = preset
-        self._add_grid_row(grid, "field.prompt_preset", preset)
-
         extra_prompt = QTextEdit(panel)
         extra_prompt.setObjectName("extraPromptEdit")
         self.extra_prompt_edit = extra_prompt
@@ -804,7 +798,6 @@ class ConversionMainPanel(QWidget):
         self.base_url_field.textChanged.connect(self._sync_gui_state)
         self.api_key_field.textChanged.connect(self._sync_gui_state)
         self.api_key_source_choices.value_changed.connect(self._sync_api_key_controls)
-        self.prompt_preset_field.textChanged.connect(self._sync_gui_state)
         self.extra_prompt_edit.textChanged.connect(self._sync_gui_state)
         self.confirm_overwrite_checkbox.toggled.connect(self._sync_gui_state)
         self.show_date_checkbox.toggled.connect(self._sync_gui_state)
@@ -1215,7 +1208,6 @@ class ConversionMainPanel(QWidget):
             for field in (
                 self.model_field,
                 self.api_key_field,
-                self.prompt_preset_field,
             )
         )
 
@@ -1251,7 +1243,6 @@ class ConversionMainPanel(QWidget):
             base_url=self.base_url_field.text(),
             api_key=self.api_key_field.text(),
             api_key_source=self._current_api_key_source(),
-            prompt_preset=self.prompt_preset_field.text(),
             extra_prompt=self.extra_prompt_edit.toPlainText(),
             temperature=self.temperature_spin_box.value(),
             timeout_seconds=None if self.timeout_spin_box.value() == 0 else self.timeout_spin_box.value(),
@@ -1295,7 +1286,6 @@ class ConversionMainPanel(QWidget):
         self.base_url_field.setText(settings.base_url)
         self.api_key_field.setText(settings.api_key)
         self.api_key_source_choices.set_value(settings.api_key_source.value)
-        self.prompt_preset_field.setText(settings.prompt_preset)
         self.extra_prompt_edit.setPlainText(settings.extra_prompt)
         self.temperature_spin_box.setValue(settings.temperature)
         self.timeout_spin_box.setValue(0.0 if settings.timeout_seconds is None else settings.timeout_seconds)

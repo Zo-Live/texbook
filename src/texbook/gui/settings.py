@@ -9,6 +9,7 @@ from enum import Enum
 from texbook.gui.display import GuiLanguage
 from texbook.gui.i18n import tr
 from texbook.gui.selection import GuiInputKind, GuiPathSelectionState
+from texbook.llm.presets import DEFAULT_PROMPT_PRESET_NAME
 
 
 class GuiOutputKind(str, Enum):
@@ -52,7 +53,7 @@ class GuiConversionSettings:
     base_url: str = ""
     api_key: str = ""
     api_key_source: GuiApiKeySource = GuiApiKeySource.direct
-    prompt_preset: str = "chinese-math"
+    prompt_preset: str = DEFAULT_PROMPT_PRESET_NAME
     extra_prompt: str = ""
     temperature: float = 1.0
     timeout_seconds: float | None = None

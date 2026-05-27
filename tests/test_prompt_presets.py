@@ -36,8 +36,13 @@ def test_loads_builtin_default_prompt_preset():
     preset = load_prompt_preset(DEFAULT_PROMPT_PRESET_NAME, repo_root=object())
 
     assert preset.name == DEFAULT_PROMPT_PRESET_NAME
-    assert "中文数学讲义" in preset.description
+    assert "数学讲义" in preset.description
     assert "{pages_text}" in preset.chunk_user_template
+
+
+def test_old_builtin_prompt_preset_name_is_not_kept_as_alias(tmp_path):
+    with pytest.raises(PromptPresetError, match="Unknown prompt preset"):
+        load_prompt_preset("chinese" "-math", repo_root=tmp_path)
 
 
 def test_saves_loads_and_lists_repository_prompt_preset(tmp_path):

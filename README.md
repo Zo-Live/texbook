@@ -77,7 +77,6 @@ TeXBook 支持 OpenAI-compatible 接口。可以在界面中填写：
 - 模型名
 - Base URL
 - API Key
-- Prompt 预设
 - 额外转换要求
 
 API Key 支持直接输入，也支持填写环境变量名。使用环境变量时，可在启动应用前设置：
@@ -128,8 +127,7 @@ export TEXBOOK_BASE_URL="https://your-api.example/v1"
 
 ### 模型与 Prompt
 
-- 默认 Prompt 预设为 `chinese-math`，面向中文数学讲义、教材或幻灯片。
-- 可以填写自定义预设名。
+- GUI 固定使用内置 `math` Prompt 预设，面向数学讲义、教材或幻灯片。
 - 额外要求会追加到当前 Prompt 后，用于一次性调整转换目标。
 - 支持模型超时、最大 token、temperature、请求重试和退避参数。
 
