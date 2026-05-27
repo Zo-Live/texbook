@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from pathlib import PurePosixPath
 import runpy
@@ -226,6 +227,16 @@ def _fill_required_task_fields(
 
 def test_icon_resource_resolves_to_docs_icon():
     assert resolve_app_icon_path() == ROOT / "docs" / "icon.ico"
+
+
+def test_icon_resource_resolves_from_pyinstaller_meipass(tmp_path, monkeypatch):
+    meipass_root = tmp_path / "bundle"
+    icon_path = meipass_root / "docs" / "icon.ico"
+    icon_path.parent.mkdir(parents=True)
+    icon_path.write_bytes(b"icon")
+    monkeypatch.setattr(sys, "_MEIPASS", str(meipass_root), raising=False)
+
+    assert resolve_app_icon_path() == icon_path
 
 
 def test_gui_import_does_not_create_qapplication():

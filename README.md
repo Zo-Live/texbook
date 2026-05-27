@@ -1,203 +1,193 @@
 # TeXBook
 
-TeXBook 是基于 WSLg 的 PDF 转 LaTeX 桌面应用。它面向数学讲义、教材和幻灯片，使用支持图片输入的 OpenAI-compatible 视觉模型识别 PDF 页面，并生成单个 `.tex` 文件或目录化 LaTeX 项目。
+TeXBook 是一款 Windows 桌面应用，用于把数学讲义、教材和幻灯片 PDF 转换为 LaTeX。
 
-应用使用 PySide6/Qt6 构建，在 WSL 发行版中运行，通过 WSLg 显示桌面界面。
+WSLg 版本位于 `WSLg` 分支，CLI 版本位于 `cli` 分支。
 
-## 环境要求
+## 快速开始
 
-- Windows 已启用 WSLg，且 WSL 发行版可以启动图形应用。
-- Python 3.10+（开发验证环境使用 3.13）。
-- 推荐使用 [uv](https://docs.astral.sh/uv/) 管理依赖。
-- 可访问的 OpenAI-compatible API，模型需要支持图片输入。
+发布包构建完成后，直接运行发布目录中的 `TeXBook.exe` 即可启动应用。
 
-以下命令默认在 WSL 发行版终端中运行。
+首次使用时建议按下列顺序配置：
 
-## 启用 WSLg
+1. 在“模型配置”区域填写模型名、Base URL、API Key 和 Prompt 预设。
+2. 在“输入”区域选择单个 PDF、多个 PDF 或目录批量。
+3. 在“输出”区域选择单个 `.tex` 或目录化项目，并选择输出目标。
+4. 点击“添加任务”，确认任务出现在右侧任务队列中。
+5. 点击“开始转换”，等待任务完成；完成后可在任务行查看输出位置。
 
-在 Windows PowerShell 中安装或更新 WSL：
+真实转换需要可访问的 OpenAI-compatible API，模型需要支持图片输入。
 
-```powershell
-wsl --install
-wsl --update
-wsl --shutdown
-```
+## 主要功能
 
-重新打开 WSL 发行版后，进入仓库目录：
+- PDF 输入：支持单个 PDF、多个 PDF 和目录批量处理。
+- 输出形式：支持单个 `.tex` 文件和目录化 LaTeX 项目。
+- 转换参数：支持页面范围、文档类、结构规划、标题来源、日期、Beamer 标题页、Beamer 块样式和 CTeX 字体配置。
+- 模型配置：支持模型名、Base URL、API Key、Prompt 预设、额外转换要求、temperature、最大 token、超时和重试。
+- 缓存与恢复：默认使用 `build/.texbook_cache/` 缓存已完成的结构规划和正文 chunk，重复转换时可复用结果。
+- 批量任务：多个 PDF 会加入同一个任务队列，可按文件级 worker 并发执行。
+- 写盘保护：目标存在时可以覆盖前确认；目录化项目覆盖只清理当前项目目录，不清理批量输出父目录。
+- 界面偏好：支持亮色/暗色模式、中文/English 切换、字号设置和路径记忆。
 
-```bash
-cd /path/to/your/workspace
-```
+## 基本使用流程
 
-如果 Qt 启动时报出 `xcb` 平台插件或光标库相关错误，可在 WSL 发行版中补齐常见运行库：
+1. 在“输入”区域选择输入类型：单个 PDF、多个 PDF 或目录批量。
+2. 选择 PDF 文件或 PDF 目录；目录批量时可设置匹配模式，默认是 `*.pdf`。
+3. 在“输出”区域选择输出形式：单个 `.tex` 或目录化项目。
+4. 选择输出目标：单个 PDF 输出可选择 `.tex` 文件或项目目录；批量输入输出到目录下的同名 `.tex` 或同名项目目录。
+5. 在“模型配置”区域填写模型名、Base URL、API Key 和 Prompt 预设。
+6. 按需调整页面范围、文档类、结构规划、缓存、并发和高级参数。
+7. 点击“添加任务”，确认任务出现在右侧任务队列中。
+8. 点击“开始转换”，等待任务完成；完成后可在任务行查看输出位置。
 
-```bash
-sudo apt update
-sudo apt install -y libxcb-cursor0 libxkbcommon-x11-0
-```
+## 输入与输出
 
-## 构建与启动
+### 输入类型
 
-安装运行依赖：
+- 单个 PDF：适合转换一本讲义、一个课件或一个短文档。
+- 多个 PDF：一次选择多个文件，每个 PDF 会成为一个独立任务。
+- 目录批量：选择一个目录并用 pattern 匹配 PDF，适合批量转换课件或章节文件。
 
-```bash
-uv sync
-```
-
-启动桌面应用：
-
-```bash
-uv run texbook-gui
-```
-
-也可以使用模块入口：
-
-```bash
-uv run python -m texbook.gui
-```
-
-开发环境需要测试与打包工具时：
-
-```bash
-uv sync --group dev
-```
-
-使用 PyInstaller 构建桌面应用：
-
-```bash
-uv run pyinstaller packaging/texbook-gui.spec
-```
-
-打包配置使用 `docs/icon.ico` 作为应用图标，产物输出到 PyInstaller 默认的 `dist/` 目录。
-
-## 模型配置
-
-TeXBook 支持 OpenAI-compatible 接口。可以在界面中填写：
-
-- 模型名
-- Base URL
-- API Key
-- Prompt 预设
-- 额外转换要求
-
-API Key 支持直接输入，也支持填写环境变量名。使用环境变量时，可在启动应用前设置：
-
-```bash
-export TEXBOOK_API_KEY="your-api-key"
-```
-
-如果接口地址不是 SDK 默认地址，可以在界面中填写 Base URL，或在启动前设置：
-
-```bash
-export TEXBOOK_BASE_URL="https://your-api.example/v1"
-```
-
-## 操作方法
-
-1. 选择 PDF 输入：支持单个 PDF、多个 PDF 或 PDF 目录。
-2. 选择输出目标：可以生成单个 `.tex` 文件，也可以生成目录化项目。
-3. 配置转换参数：页面范围、文档类、结构规划、标题来源、模型、缓存和并发等。
-4. 点击“添加任务”，把当前输入和参数加入任务队列。
-5. 点击“开始转换”，后台任务会显示阶段、进度、缓存命中、重试和完成结果。
-6. 需要中止时，可在任务行点击取消。
-7. 目标文件或项目目录已存在时，按界面中的写盘策略确认覆盖或保留旧内容。
-
-## 功能介绍
-
-### 输入
-
-- 单个 PDF：适合一次转换一本讲义或一个课件。
-- 多个 PDF：一次选择多个文件，应用会按文件创建独立任务。
-- 目录批量：选择目录并用 pattern 匹配 PDF，默认匹配 `*.pdf`。
-
-### 输出
+### 输出形式
 
 - 单个 `.tex`：每个 PDF 生成一个 LaTeX 文件。
 - 目录化项目：每个 PDF 生成独立项目目录，包含入口文件、preamble 和章节文件。
-- 覆盖前确认：目标已存在时可先弹窗确认；也可以按设置直接覆盖。
-- 危险路径保护：应用会拒绝清理磁盘根、仓库根、源码包目录等高风险目标。
+
+批量输入时，TeXBook 会按 PDF 文件名推导输出目标。若多个输入会写入同一路径，应用会拒绝创建任务并提示冲突。
+
+## 转换参数
 
 ### 页面与文档结构
 
-- 页面范围支持 `1,3-6` 这样的 1-based 页码表达。
+- 页面范围支持 `1,3-6` 这样的 1-based 页码表达；留空表示全部页面。
 - 文档类支持 `auto`、`article`、`book`、`beamer`、`ctexart`、`ctexbook`、`ctexbeamer`。
-- 自动文档类会结合 PDF 页面图像、文本层、书签和标题线索判断输出外壳。
-- 目录化项目支持结构规划：可使用 PDF 书签、本地标题线索或 LLM 规划章节。
-- Beamer 输出支持标题页开关、原生 block 或 `tcolorbox` 风格强调块。
+- `auto` 会结合 PDF 页面图像、文本层、书签和标题线索判断文档外壳。
+- 目录化项目支持结构规划，可使用 PDF 书签、本地标题线索或 LLM 规划章节。
+- Beamer 输出支持自动标题页开关、原生 block 或 `tcolorbox` 强调块样式。
 - CTeX 输出支持默认字体配置和本机字体配置。
 
 ### 模型与 Prompt
 
-- 默认 Prompt 预设为 `chinese-math`，面向中文数学讲义、教材或幻灯片。
-- 可以填写自定义预设名。
-- 额外要求会追加到当前 Prompt 后，用于一次性调整转换目标。
-- 支持模型超时、最大 token、temperature、请求重试和退避参数。
+- Prompt 预设默认是 `chinese-math`，适合中文数学讲义、教材和幻灯片。
+- API Key 可以直接输入，也可以填写环境变量名。
+- Base URL 用于 OpenAI-compatible 接口；不填写时使用 SDK 默认地址。
+- 额外要求会追加到当前 Prompt 后，用于本次任务的转换偏好。
+- 高级参数支持 temperature、最大 token、请求超时、重试次数和重试退避。
+
+环境变量方式适合不想在应用设置中保存密钥的场景。选择环境变量模式时，请在系统环境变量中提前配置真实密钥，并在界面中填写变量名。
 
 ### 缓存与并发
 
 - 默认启用断点续传缓存，缓存目录为 `build/.texbook_cache/`。
-- 相同 PDF、页码、模型、Prompt、图片参数和输出选项再次转换时会复用已完成结果。
+- 相同 PDF、页码、模型、Prompt、图片参数和输出选项再次转换时会复用缓存。
 - 可以在界面中清理当前参数匹配的缓存。
-- 批量任务支持文件级 worker 并发。
-- LLM 请求支持全局最大并发和最小请求间隔设置。
+- 批量 worker 控制文件级并发；LLM 最大并发和请求间隔控制模型请求节奏。
 
-### 任务队列
+## 任务队列与写盘
 
-- 每个 PDF 会成为独立任务。
-- 任务行显示当前状态、阶段、进度、缓存命中、重试次数、失败原因和完成结果。
-- 待处理任务可立即取消；运行中任务会在当前核心步骤收敛后取消。
-- 队列完成后可继续添加新任务。
+每个 PDF 会成为一个独立任务。任务行会显示：
 
-### 界面偏好
+- 当前状态：待处理、运行中、取消中、已取消、完成或失败。
+- 当前阶段：提取页面、判断文档类、结构规划、转换正文、生成标题或收尾。
+- 进度、缓存命中次数、重试次数、失败原因和完成结果。
+
+待处理任务可以立即取消；运行中的任务会在当前核心步骤结束后协作式取消。后台运行时不能继续添加新任务；队列空闲后可以继续添加或清空任务列表。
+
+目标文件或项目目录已存在时，TeXBook 会按界面中的“覆盖前确认”设置处理。单个 `.tex` 输出只替换目标文件；目录化项目覆盖只清理当前项目目录，不清理批量输出父目录。应用会拒绝清理磁盘根、仓库根、源码包目录等高风险目标。
+
+## 界面偏好
 
 - 支持亮色模式和暗色模式。
 - 支持中文和 English 界面切换。
 - 设置页可调整 GUI 字号。
 - 应用会记忆最近输入目录、输出目录、缓存目录和界面偏好。
 
-### 复杂内容
+## 复杂内容
 
-- 清晰表格会尽量转换为可编译的 `tabular` 或 `array`。
-- 图片化表格、图片、图表、边栏、多栏和旁注等复杂内容会以 TODO 注释和 notes 记录。
-- 目录化项目会在 metadata 中保留复杂内容候选信息，便于后续扩展。
+- 清晰表格会尽量转换为可编译的 `tabular`、`array` 或数学环境。
+- 图片化表格、图片、图表、边栏、多栏和旁注等复杂内容暂以 TODO 注释和 notes 记录。
+- 目录化项目会在 metadata 中保留复杂内容候选信息，待后续扩展。
 
-## 项目结构
+## 开发与打包
+
+### 从源码启动
+
+开发环境可在 Windows PowerShell 中从仓库根目录启动：
+
+```powershell
+uv sync
+uv run texbook-gui
+```
+
+也可以使用模块入口：
+
+```powershell
+uv run python -m texbook.gui
+```
+
+如果同一份仓库也曾在 WSL 中使用过，不要让 Windows PowerShell 与 WSL 共用同一个虚拟环境。Windows 端建议使用独立环境，例如：
+
+```powershell
+uv venv .venv-win
+uv sync
+uv run texbook-gui
+```
+
+从 PowerShell 启动源码版且需要临时设置模型接口时，可在启动前设置环境变量：
+
+```powershell
+$env:TEXBOOK_API_KEY = "your-api-key"
+$env:TEXBOOK_BASE_URL = "https://your-api.example/v1"
+uv run texbook-gui
+```
+
+### 打包发布
+
+TeXBook 使用 PyInstaller 生成 Windows GUI 应用。开发环境中可运行：
+
+```powershell
+uv sync --group dev
+uv run pyinstaller packaging/texbook-gui.spec
+```
+
+打包配置使用 `docs/icon.ico` 作为窗口和可执行文件图标，并把图标作为运行时资源放入发布包。发布产物输出到 PyInstaller 默认的 `dist/` 目录。
+
+### 项目结构
 
 ```text
 .
-├─ .gitignore
-├─ .python-version
 ├─ pyproject.toml
 ├─ uv.lock
+├─ README.md
 ├─ docs/
 │  └─ icon.ico                    # 应用图标
 ├─ packaging/
-│  └─ texbook-gui.spec            # PyInstaller 打包入口
+│  └─ texbook-gui.spec            # Windows GUI 打包入口
 ├─ src/
 │  └─ texbook/
-│     ├─ gui/                     # WSLg 桌面应用入口、窗口、面板和任务执行
+│     ├─ gui/                     # 桌面应用入口、窗口、面板和任务执行
 │     ├─ convert/                 # LaTeX 文档外壳与项目输出
 │     ├─ extract/                 # PDF 文本、位置、字号与图像提取
 │     └─ llm/                     # LLM 客户端、缓存、调度和 Prompt
-└─ tests/                         # 单元测试
+└─ tests/                         # 单元测试与 GUI 回归测试
 ```
 
-常用目录约定：
+常用生成目录：
 
-- `input/`、`docs/`：可放置待转换 PDF，默认不进入 Git。
+- `input/`：可放置待转换 PDF，默认不进入 Git。
 - `output/`：可放置转换结果，默认不进入 Git。
 - `build/`：默认缓存和构建临时目录，默认不进入 Git。
 - `dist/`：PyInstaller 打包输出目录，默认不进入 Git。
 
-## 开发验证
+### 开发验证
 
-```bash
+```powershell
 uv run pytest tests/test_gui_skeleton.py -q
 uv run pytest
 uv run ruff check
 ```
 
-真实转换会调用模型服务。验证转换效果时，建议在界面中选择少量页面以节省耗时。
+真实转换会调用模型服务。验证转换效果时，建议在界面中选择少量页面以节省时间和费用。
 
 ## 许可证
 
