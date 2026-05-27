@@ -498,7 +498,7 @@ def test_pyinstaller_spec_references_gui_entry_and_icon():
     assert "src\" / \"texbook\" / \"gui\" / \"__main__.py" in spec_text
     assert "docs\" / \"icon.ico" in spec_text
     assert "datas=[(str(ICON_PATH), \"docs\")]" in spec_text
-    assert 'name="texbook"' in spec_text
+    assert 'name="TeXBook"' in spec_text
     assert "icon=str(ICON_PATH)" in spec_text
     assert "console=False" in spec_text
 
