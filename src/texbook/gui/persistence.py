@@ -16,10 +16,15 @@ from texbook.gui.display import (
 )
 from texbook.gui.resources import APP_DISPLAY_NAME, APP_ORGANIZATION_NAME
 from texbook.gui.selection import GuiInputKind, GuiInputSelection, GuiPathSelectionState
-from texbook.gui.settings import GuiApiKeySource, GuiConversionSettings, GuiOutputKind
+from texbook.gui.settings import (
+    LEGACY_GUI_CACHE_DIRECTORY,
+    GuiApiKeySource,
+    GuiConversionSettings,
+    GuiOutputKind,
+)
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -151,7 +156,7 @@ class GuiSettingsStore:
             ),
             max_tokens=self._read_int("model/max_tokens", defaults.max_tokens),
             cache_enabled=self._read_bool("cache/enabled", defaults.cache_enabled),
-            cache_directory=self._read_str("cache/directory", defaults.cache_directory),
+            cache_directory=self._read_cache_directory(defaults.cache_directory),
             clear_cache=False,
             chunk_pages=self._read_int("runtime/chunk_pages", defaults.chunk_pages),
             prefetch_chunks=self._read_int("runtime/prefetch_chunks", defaults.prefetch_chunks),
@@ -294,6 +299,15 @@ class GuiSettingsStore:
             return default
         return str(value)
 
+    def _read_cache_directory(self, default: str) -> str:
+        value = self._settings.value("cache/directory", None)
+        if value is None:
+            return default
+        text = str(value).strip()
+        if not text or _is_legacy_cache_directory(text):
+            return default
+        return text
+
     def _read_bool(self, key: str, default: bool) -> bool:
         return _coerce_bool(self._settings.value(key, default), default)
 
@@ -371,6 +385,14 @@ def _pure_path(path: str) -> PurePath:
 
 def _looks_windows_path(path: str) -> bool:
     return "\\" in path or ":" in path
+
+
+def _is_legacy_cache_directory(path: str) -> bool:
+    normalized = path.strip().replace("\\", "/").rstrip("/")
+    return normalized in {
+        LEGACY_GUI_CACHE_DIRECTORY,
+        f"./{LEGACY_GUI_CACHE_DIRECTORY}",
+    }
 
 
 def _output_kind_value(raw: str, default: GuiOutputKind) -> GuiOutputKind:

@@ -496,10 +496,11 @@ class ConversionMainPanel(QWidget):
         self.cache_enabled_checkbox = cache_enabled
         self._add_grid_row(grid, "field.cache", cache_enabled)
 
+        default_cache_directory = GuiConversionSettings().cache_directory
         cache_dir = QLineEdit(panel)
         cache_dir.setObjectName("cacheDirectoryField")
-        cache_dir.setPlaceholderText("build/.texbook_cache")
-        cache_dir.setText("build/.texbook_cache")
+        cache_dir.setPlaceholderText(default_cache_directory)
+        cache_dir.setText(default_cache_directory)
         self.cache_directory_field = cache_dir
         browse = self._make_icon_button(
             "cacheBrowseButton",
@@ -1100,8 +1101,7 @@ class ConversionMainPanel(QWidget):
 
     def _cache_dialog_directory(self) -> str:
         cache_directory = self.cache_directory_field.text().strip()
-        default_cache_directory = GuiConversionSettings().cache_directory
-        if cache_directory and cache_directory != default_cache_directory:
+        if cache_directory:
             return cache_directory
         return (
             self.path_memory.last_cache_directory

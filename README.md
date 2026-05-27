@@ -24,7 +24,7 @@ WSLg 版本位于 `WSLg` 分支，CLI 版本位于 `cli` 分支。
 - 输出形式：支持单个 `.tex` 文件和目录化 LaTeX 项目。
 - 转换参数：支持页面范围、文档类、结构规划、标题来源、日期、Beamer 标题页、Beamer 块样式和 CTeX 字体配置。
 - 模型配置：支持模型名、Base URL、API Key、Prompt 预设、额外转换要求、temperature、最大 token、超时和重试。
-- 缓存与恢复：默认使用 `build/.texbook_cache/` 缓存已完成的结构规划和正文 chunk，重复转换时可复用结果。
+- 缓存与恢复：默认使用 Windows 本机应用缓存目录缓存已完成的结构规划和正文 chunk，重复转换时可复用结果。
 - 批量任务：多个 PDF 会加入同一个任务队列，可按文件级 worker 并发执行。
 - 写盘保护：目标存在时可以覆盖前确认；目录化项目覆盖只清理当前项目目录，不清理批量输出父目录。
 - 界面偏好：支持亮色/暗色模式、中文/English 切换、字号设置和路径记忆。
@@ -78,7 +78,7 @@ WSLg 版本位于 `WSLg` 分支，CLI 版本位于 `cli` 分支。
 
 ### 缓存与并发
 
-- 默认启用断点续传缓存，缓存目录为 `build/.texbook_cache/`。
+- 默认启用断点续传缓存，缓存目录位于 Windows 本机用户的应用缓存位置，例如 Local AppData 下的 TeXBook 缓存目录。
 - 相同 PDF、页码、模型、Prompt、图片参数和输出选项再次转换时会复用缓存。
 - 可以在界面中清理当前参数匹配的缓存。
 - 批量 worker 控制文件级并发；LLM 最大并发和请求间隔控制模型请求节奏。
@@ -176,7 +176,7 @@ uv run pyinstaller packaging/texbook-gui.spec
 
 - `input/`：可放置待转换 PDF，默认不进入 Git。
 - `output/`：可放置转换结果，默认不进入 Git。
-- `build/`：默认缓存和构建临时目录，默认不进入 Git。
+- `build/`：开发构建临时目录；CLI 默认缓存仍使用该目录，GUI 默认缓存使用系统应用缓存目录。
 - `dist/`：PyInstaller 打包输出目录，默认不进入 Git。
 
 ### 开发验证

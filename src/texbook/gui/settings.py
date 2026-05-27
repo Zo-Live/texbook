@@ -5,10 +5,59 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
+from PySide6.QtCore import QCoreApplication, QStandardPaths
+
+from texbook.gui.resources import APP_DISPLAY_NAME, APP_ORGANIZATION_NAME
 from texbook.gui.display import GuiLanguage
 from texbook.gui.i18n import tr
 from texbook.gui.selection import GuiInputKind, GuiPathSelectionState
+
+
+LEGACY_GUI_CACHE_DIRECTORY = "build/.texbook_cache"
+
+
+def default_gui_cache_directory() -> str:
+    """Return the platform application cache directory for the GUI."""
+    _ensure_qt_application_identity()
+    cache_location = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.CacheLocation
+    )
+    if cache_location:
+        return cache_location
+
+    app_data_location = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.AppLocalDataLocation
+    )
+    if app_data_location:
+        return _join_path_text(app_data_location, "cache")
+
+    for location in (
+        QStandardPaths.StandardLocation.DocumentsLocation,
+        QStandardPaths.StandardLocation.HomeLocation,
+    ):
+        directory = QStandardPaths.writableLocation(location)
+        if directory:
+            return _join_path_text(directory, APP_DISPLAY_NAME, "cache")
+
+    try:
+        return str(Path.home() / ".cache" / APP_DISPLAY_NAME)
+    except RuntimeError:
+        return _join_path_text(APP_DISPLAY_NAME, "cache")
+
+
+def _ensure_qt_application_identity() -> None:
+    if QCoreApplication.organizationName() != APP_ORGANIZATION_NAME:
+        QCoreApplication.setOrganizationName(APP_ORGANIZATION_NAME)
+    if QCoreApplication.applicationName() != APP_DISPLAY_NAME:
+        QCoreApplication.setApplicationName(APP_DISPLAY_NAME)
+
+
+def _join_path_text(directory: str, *parts: str) -> str:
+    base = directory.rstrip("/\\")
+    separator = "\\" if "\\" in directory and "/" not in directory else "/"
+    return separator.join((base, *parts)) if base else separator.join(parts)
 
 
 class GuiOutputKind(str, Enum):
@@ -58,7 +107,7 @@ class GuiConversionSettings:
     timeout_seconds: float | None = None
     max_tokens: int = 128000
     cache_enabled: bool = True
-    cache_directory: str = "build/.texbook_cache"
+    cache_directory: str = field(default_factory=default_gui_cache_directory)
     clear_cache: bool = False
     chunk_pages: int = 4
     prefetch_chunks: int = 1

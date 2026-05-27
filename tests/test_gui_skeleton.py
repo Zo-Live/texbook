@@ -59,10 +59,12 @@ from texbook.gui.resources import (  # noqa: E402
 )
 from texbook.gui.selection import GuiInputKind, GuiInputSelection, GuiPathSelectionState  # noqa: E402
 from texbook.gui.settings import (  # noqa: E402
+    LEGACY_GUI_CACHE_DIRECTORY,
     GuiApiKeySource,
     GuiConversionMode,
     GuiConversionSettings,
     GuiOutputKind,
+    default_gui_cache_directory,
     validate_gui_settings,
 )
 from texbook.gui.theme import build_fluent_stylesheet  # noqa: E402
@@ -650,7 +652,8 @@ def test_conversion_panel_default_settings_match_cli_defaults():
     assert settings.timeout_seconds is None
     assert settings.max_tokens == 128000
     assert settings.cache_enabled is True
-    assert settings.cache_directory == "build/.texbook_cache"
+    assert settings.cache_directory == default_gui_cache_directory()
+    assert settings.cache_directory != LEGACY_GUI_CACHE_DIRECTORY
     assert settings.clear_cache is False
     assert settings.chunk_pages == 4
     assert settings.prefetch_chunks == 1
@@ -669,6 +672,11 @@ def test_conversion_panel_default_settings_match_cli_defaults():
     assert settings.ctex_font_profile == "default"
     assert panel.validate_settings() == []
     assert panel.findChild(QLineEdit, "promptPresetField").text() == "chinese-math"
+    assert panel.findChild(QLineEdit, "cacheDirectoryField").text() == default_gui_cache_directory()
+    assert (
+        panel.findChild(QLineEdit, "cacheDirectoryField").placeholderText()
+        == default_gui_cache_directory()
+    )
 
     panel.close()
     app.quit()
@@ -1045,14 +1053,16 @@ def test_conversion_panel_english_validation_and_task_text(monkeypatch):
 def test_conversion_panel_cache_directory_browse_updates_settings(monkeypatch):
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
+    captured = []
 
     monkeypatch.setattr(
         "texbook.gui.main_panel.QFileDialog.getExistingDirectory",
-        lambda *args, **kwargs: r"D:\tex-cache",
+        lambda *args, **kwargs: captured.append(args[2]) or r"D:\tex-cache",
     )
 
     panel.findChild(QToolButton, "cacheBrowseButton").click()
 
+    assert captured == [default_gui_cache_directory()]
     assert panel.findChild(QLineEdit, "cacheDirectoryField").text() == r"D:\tex-cache"
     assert panel.current_settings().cache_directory == r"D:\tex-cache"
 
@@ -1129,6 +1139,18 @@ def test_gui_settings_store_round_trips_persistent_settings(tmp_path):
     assert loaded.path_memory.last_input_directory == r"C:\books"
     assert loaded.path_memory.last_output_directory == r"D:\tex-output"
     assert loaded.path_memory.last_cache_directory == r"D:\tex-cache"
+
+
+def test_gui_settings_store_migrates_legacy_default_cache_directory(tmp_path):
+    store = _gui_settings_store(tmp_path)
+
+    assert store.load_conversion_settings().cache_directory == default_gui_cache_directory()
+
+    store._settings.setValue("cache/directory", LEGACY_GUI_CACHE_DIRECTORY)
+    assert store.load_conversion_settings().cache_directory == default_gui_cache_directory()
+
+    store._settings.setValue("cache/directory", r"D:\tex-cache")
+    assert store.load_conversion_settings().cache_directory == r"D:\tex-cache"
 
 
 def test_gui_settings_store_round_trips_display_preferences(tmp_path):
