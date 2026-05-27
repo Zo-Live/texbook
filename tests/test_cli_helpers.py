@@ -99,7 +99,7 @@ def test_build_converter_normalizes_image_options(tmp_path):
     assert converter.cache_options.cache_dir == tmp_path / "cache"
     assert converter.cache_options.llm_model == "test-model"
     assert converter.cache_options.clear is False
-    assert converter.prompt_preset.name == "chinese-math"
+    assert converter.prompt_preset.name == "math"
     assert converter.title_source == "filename"
     assert converter.manual_title is None
     assert converter.show_date is False
@@ -474,7 +474,7 @@ def test_presets_cli_lists_builtin_preset():
     result = runner.invoke(app, ["presets", "list"])
 
     assert result.exit_code == 0
-    assert "chinese-math" in result.output
+    assert "math" in result.output
     assert "builtin" in result.output
 
 

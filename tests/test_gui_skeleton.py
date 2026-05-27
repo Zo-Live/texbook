@@ -220,11 +220,9 @@ def _fill_required_task_fields(
     *,
     model: str = "model",
     api_key: str = "key",
-    prompt_preset: str = "chinese-math",
 ) -> None:
     panel.findChild(QLineEdit, "modelField").setText(model)
     panel.findChild(QLineEdit, "apiKeyField").setText(api_key)
-    panel.findChild(QLineEdit, "promptPresetField").setText(prompt_preset)
 
 
 def test_icon_resource_resolves_to_docs_icon():
@@ -561,7 +559,6 @@ def test_conversion_panel_exposes_future_task_control_points():
         "baseUrlField",
         "apiKeyField",
         "apiKeySourceChoices",
-        "promptPresetField",
         "extraPromptEdit",
         "cacheEnabledCheckBox",
         "cacheDirectoryField",
@@ -647,7 +644,7 @@ def test_conversion_panel_default_settings_match_cli_defaults():
     assert settings.title_source == "filename"
     assert settings.show_date is False
     assert settings.beamer_title_page is True
-    assert settings.prompt_preset == "chinese-math"
+    assert settings.prompt_preset == "math"
     assert settings.temperature == 1.0
     assert settings.timeout_seconds is None
     assert settings.max_tokens == 128000
@@ -671,7 +668,7 @@ def test_conversion_panel_default_settings_match_cli_defaults():
     assert settings.beamer_box_style == "block"
     assert settings.ctex_font_profile == "default"
     assert panel.validate_settings() == []
-    assert panel.findChild(QLineEdit, "promptPresetField").text() == "chinese-math"
+    assert panel.findChild(QLineEdit, "promptPresetField") is None
     assert panel.findChild(QLineEdit, "cacheDirectoryField").text() == default_gui_cache_directory()
     assert (
         panel.findChild(QLineEdit, "cacheDirectoryField").placeholderText()
@@ -702,7 +699,7 @@ def test_conversion_panel_settings_round_trip_preserves_all_fields():
             model="vision-model",
             base_url="https://api.example/v1",
             api_key="secret",
-            prompt_preset="chinese-math",
+            prompt_preset="math",
             extra_prompt="只提取公式",
             temperature=0.7,
             timeout_seconds=120.0,
@@ -1090,7 +1087,7 @@ def test_gui_settings_store_round_trips_persistent_settings(tmp_path):
             base_url="https://api.example/v1",
             api_key="TEXBOOK_GUI_KEY",
             api_key_source=GuiApiKeySource.environment,
-            prompt_preset="chinese-math",
+            prompt_preset="math",
             extra_prompt="只提取公式",
             temperature=0.7,
             timeout_seconds=120.0,
@@ -1151,6 +1148,15 @@ def test_gui_settings_store_migrates_legacy_default_cache_directory(tmp_path):
 
     store._settings.setValue("cache/directory", r"D:\tex-cache")
     assert store.load_conversion_settings().cache_directory == r"D:\tex-cache"
+
+
+def test_gui_settings_store_ignores_persisted_prompt_preset(tmp_path):
+    store = _gui_settings_store(tmp_path)
+    store._settings.setValue("model/prompt_preset", "custom-old")
+
+    loaded = store.load_conversion_settings()
+
+    assert loaded.prompt_preset == "math"
 
 
 def test_gui_settings_store_round_trips_display_preferences(tmp_path):
@@ -1247,7 +1253,7 @@ def test_conversion_panel_single_pdf_and_output_directory_enable_add_task(monkey
     app.quit()
 
 
-def test_conversion_panel_add_task_button_requires_model_key_and_prompt():
+def test_conversion_panel_add_task_button_requires_model_key_and_batch_pattern():
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
     add_button = panel.findChild(QPushButton, "addTaskButton")
@@ -1262,10 +1268,6 @@ def test_conversion_panel_add_task_button_requires_model_key_and_prompt():
     panel.findChild(QLineEdit, "apiKeyField").setText("key")
     assert add_button.isEnabled() is True
 
-    panel.findChild(QLineEdit, "promptPresetField").setText("")
-    assert add_button.isEnabled() is False
-
-    panel.findChild(QLineEdit, "promptPresetField").setText("chinese-math")
     _set_choice(panel, "apiKeySourceChoices", GuiApiKeySource.environment.value)
     panel.findChild(QLineEdit, "apiKeyField").setText("")
     assert add_button.isEnabled() is False
@@ -1550,7 +1552,7 @@ def test_gui_core_adapter_maps_settings_to_core_options(tmp_path, monkeypatch):
         title_source="filename",
         show_date=True,
         beamer_title_page=False,
-        prompt_preset="chinese-math",
+        prompt_preset="math",
         extra_prompt="只提取公式",
         temperature=0.5,
         timeout_seconds=30.0,
