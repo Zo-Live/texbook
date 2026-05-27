@@ -14,7 +14,7 @@ _STRINGS: dict[GuiLanguage, dict[str, str]] = {
         "menu.about": "关于 {app_name}",
         "dialog.about.title": "关于 {app_name}",
         "dialog.about.text": (
-            "{app_name} 是基于 WSLg 的 PDF 转 LaTeX 桌面应用，面向数学讲义、教材和幻灯片。"
+            "{app_name} 是一款 Windows 桌面应用，用于把数学讲义、教材和幻灯片 PDF 转换为 LaTeX。"
         ),
         "dialog.about.informative": (
             "基本流程：\n"
@@ -239,7 +239,7 @@ _STRINGS: dict[GuiLanguage, dict[str, str]] = {
         "menu.about": "About {app_name}",
         "dialog.about.title": "About {app_name}",
         "dialog.about.text": (
-            "{app_name} is a WSLg desktop app for converting math lecture notes, textbooks, and slides from PDF to LaTeX."
+            "{app_name} is a Windows desktop app for converting math lecture notes, textbooks, and slide PDFs to LaTeX."
         ),
         "dialog.about.informative": (
             "Basic workflow:\n"

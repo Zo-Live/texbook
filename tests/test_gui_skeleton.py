@@ -329,7 +329,8 @@ def test_main_window_about_action_opens_about_dialog(monkeypatch):
         assert not self.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint
         assert not self.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint
         text = "\n".join(label.text() for label in self.findChildren(QLabel))
-        assert "WSLg" in text
+        assert "Windows 桌面应用" in text
+        assert "WSLg" not in text
         assert "任务队列会展示阶段、进度、缓存命中、重试、失败原因和完成结果" in text
         assert "GUI 只" not in text
         assert "LaTeX 编译" not in text
