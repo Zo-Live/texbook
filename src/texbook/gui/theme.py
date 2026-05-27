@@ -370,6 +370,21 @@ def build_fluent_stylesheet(
         border-radius: 4px;
     }}
 
+    QScrollArea#settingsScrollArea {{
+        background: {token["window_bg"]};
+        border: none;
+    }}
+
+    QScrollArea#settingsScrollArea QWidget#settingsViewport {{
+        background: {token["window_bg"]};
+    }}
+
+    QWidget#settingsPane,
+    QWidget#parametersPanel {{
+        background: {token["window_bg"]};
+        border: none;
+    }}
+
     QScrollArea#taskListScrollArea {{
         background: {token["surface"]};
         border: none;
@@ -388,8 +403,4 @@ def build_fluent_stylesheet(
         background: {token["surface"]};
     }}
 
-    QWidget#settingsPane {{
-        background: transparent;
-        border: none;
-    }}
     """

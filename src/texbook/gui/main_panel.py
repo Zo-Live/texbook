@@ -234,6 +234,7 @@ class ConversionMainPanel(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.viewport().setObjectName("settingsViewport")
 
         pane = QWidget(scroll)
         pane.setObjectName("settingsPane")
@@ -1180,12 +1181,10 @@ class ConversionMainPanel(QWidget):
         self._publish_status_message(self._status_message())
 
     def _refresh_action_state(self) -> None:
-        settings = self.current_settings()
         is_running = self._executor is not None
         self.add_task_button.setEnabled(
             not is_running
-            and self.selection_state.can_add_task
-            and not validate_gui_settings(settings, language=self._language)
+            and self._has_required_task_fields()
         )
         self.clear_tasks_button.setEnabled(not is_running and bool(self._task_states))
         self.start_button.setEnabled(
@@ -1205,6 +1204,20 @@ class ConversionMainPanel(QWidget):
         self.structure_max_pages_spin_box.setEnabled(project_mode)
         self.batch_workers_spin_box.setEnabled(self._current_input_kind() != GuiInputKind.single_file)
         self.batch_pattern_field.setEnabled(self._current_input_kind() == GuiInputKind.directory)
+
+    def _has_required_task_fields(self) -> bool:
+        if not self.selection_state.can_add_task:
+            return False
+        if self._current_input_kind() == GuiInputKind.directory and not self.batch_pattern_field.text().strip():
+            return False
+        return all(
+            field.text().strip()
+            for field in (
+                self.model_field,
+                self.api_key_field,
+                self.prompt_preset_field,
+            )
+        )
 
     def open_settings_dialog(self) -> GuiDisplayPreferences | None:
         dialog = SettingsDialog(self, preferences=self._display_preferences)

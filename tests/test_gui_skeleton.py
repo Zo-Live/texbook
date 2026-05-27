@@ -212,6 +212,18 @@ def _choice_value(panel: QWidget, object_name: str) -> str:
     return _choice(panel, object_name).value()
 
 
+def _fill_required_task_fields(
+    panel: QWidget,
+    *,
+    model: str = "model",
+    api_key: str = "key",
+    prompt_preset: str = "chinese-math",
+) -> None:
+    panel.findChild(QLineEdit, "modelField").setText(model)
+    panel.findChild(QLineEdit, "apiKeyField").setText(api_key)
+    panel.findChild(QLineEdit, "promptPresetField").setText(prompt_preset)
+
+
 def test_icon_resource_resolves_to_docs_icon():
     assert resolve_app_icon_path() == ROOT / "docs" / "icon.ico"
 
@@ -258,6 +270,18 @@ def test_gui_dark_stylesheet_covers_dialog_and_choice_groups():
     assert 'QWidget[choiceGroup="true"]:disabled QCheckBox' in stylesheet
     assert "QScrollArea#taskListScrollArea" in stylesheet
     assert "QWidget#taskRowsContainer" in stylesheet
+
+
+def test_gui_stylesheet_sets_settings_scroll_background_for_both_themes():
+    light = build_fluent_stylesheet(GuiThemeMode.light)
+    dark = build_fluent_stylesheet(GuiThemeMode.dark)
+
+    for stylesheet, background in [(light, "#f6f7f9"), (dark, "#17191d")]:
+        assert "QScrollArea#settingsScrollArea" in stylesheet
+        assert "QScrollArea#settingsScrollArea QWidget#settingsViewport" in stylesheet
+        assert "QWidget#settingsPane," in stylesheet
+        assert "QWidget#parametersPanel" in stylesheet
+        assert f"background: {background}" in stylesheet
 
 
 def test_main_window_has_basic_lifecycle_shell():
@@ -502,6 +526,9 @@ def test_conversion_panel_exposes_future_task_control_points():
         "pdfInputBrowseButton",
         "outputDirectoryField",
         "outputBrowseButton",
+        "settingsScrollArea",
+        "settingsViewport",
+        "settingsPane",
         "inputTypeChoices",
         "outputKindChoices",
         "batchPatternField",
@@ -928,6 +955,7 @@ def test_reset_defaults_keeps_theme_language_paths_and_tasks(monkeypatch):
     _set_choice(panel, "outputKindChoices", GuiOutputKind.project.value)
     panel.set_input_selection(GuiInputSelection.from_single_file("a.pdf"))
     panel.set_output_directory("out/a.tex")
+    _fill_required_task_fields(panel)
     panel.findChild(QPushButton, "addTaskButton").click()
     assert len(panel.task_view_states()) == 1
 
@@ -964,6 +992,7 @@ def test_conversion_panel_english_validation_and_task_text(monkeypatch):
     panel.findChild(QLineEdit, "pagesField").setText("")
     panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
     panel.set_output_directory("out")
+    _fill_required_task_fields(panel)
     panel.findChild(QPushButton, "addTaskButton").click()
     states = panel.task_view_states()
 
@@ -1172,8 +1201,50 @@ def test_conversion_panel_single_pdf_and_output_directory_enable_add_task(monkey
 
     assert panel.selection_state.output_directory == r"D:\tex-output\lecture.tex"
     assert panel.findChild(QLineEdit, "outputDirectoryField").text() == r"D:\tex-output\lecture.tex"
+    assert not panel.findChild(QPushButton, "addTaskButton").isEnabled()
+
+    _fill_required_task_fields(panel)
+
     assert panel.findChild(QPushButton, "addTaskButton").isEnabled()
     assert not panel.findChild(QPushButton, "startButton").isEnabled()
+
+    panel.close()
+    app.quit()
+
+
+def test_conversion_panel_add_task_button_requires_model_key_and_prompt():
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+    add_button = panel.findChild(QPushButton, "addTaskButton")
+
+    panel.set_input_selection(GuiInputSelection.from_single_file(r"C:\books\lecture.pdf"))
+    panel.set_output_directory(r"D:\tex-output\lecture.tex")
+    assert add_button.isEnabled() is False
+
+    panel.findChild(QLineEdit, "modelField").setText("model")
+    assert add_button.isEnabled() is False
+
+    panel.findChild(QLineEdit, "apiKeyField").setText("key")
+    assert add_button.isEnabled() is True
+
+    panel.findChild(QLineEdit, "promptPresetField").setText("")
+    assert add_button.isEnabled() is False
+
+    panel.findChild(QLineEdit, "promptPresetField").setText("chinese-math")
+    _set_choice(panel, "apiKeySourceChoices", GuiApiKeySource.environment.value)
+    panel.findChild(QLineEdit, "apiKeyField").setText("")
+    assert add_button.isEnabled() is False
+
+    panel.findChild(QLineEdit, "apiKeyField").setText("TEXBOOK_GUI_TEST_KEY")
+    assert add_button.isEnabled() is True
+
+    _set_choice(panel, "inputTypeChoices", GuiInputKind.directory.value)
+    panel.set_input_selection(GuiInputSelection.from_directory(r"C:\books"))
+    panel.findChild(QLineEdit, "batchPatternField").setText("")
+    assert add_button.isEnabled() is False
+
+    panel.findChild(QLineEdit, "batchPatternField").setText("*.pdf")
+    assert add_button.isEnabled() is True
 
     panel.close()
     app.quit()
@@ -1187,6 +1258,7 @@ def test_conversion_panel_add_task_clears_input_and_output_paths(monkeypatch):
 
     panel.set_input_selection(GuiInputSelection.from_single_file(r"C:\books\lecture.pdf"))
     panel.set_output_directory(r"D:\tex-output\lecture.tex")
+    _fill_required_task_fields(panel)
 
     assert panel.current_path_memory().last_input_directory == r"C:\books"
     assert panel.current_path_memory().last_output_directory == r"D:\tex-output"
@@ -1319,6 +1391,7 @@ def test_conversion_panel_switching_input_type_clears_previous_input_only():
     panel = ConversionMainPanel()
     panel.set_input_selection(GuiInputSelection.from_single_file(r"C:\docs\a.pdf"))
     panel.set_output_directory(r"D:\tex-output")
+    _fill_required_task_fields(panel)
 
     assert panel.findChild(QPushButton, "addTaskButton").isEnabled()
 
@@ -1962,6 +2035,7 @@ def test_conversion_panel_adds_visual_task_rows_and_updates_progress(monkeypatch
 
     panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
     panel.set_output_directory("out")
+    _fill_required_task_fields(panel)
     panel.findChild(QPushButton, "addTaskButton").click()
 
     states = panel.task_view_states()
@@ -2021,6 +2095,7 @@ def test_conversion_panel_clear_tasks_button_empties_queue(monkeypatch):
 
     panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
     panel.set_output_directory("out")
+    _fill_required_task_fields(panel)
     panel.findChild(QPushButton, "addTaskButton").click()
     assert len(panel.task_view_states()) == 2
     assert panel.findChild(QToolButton, "clearTasksButton").isEnabled() is True
@@ -2048,6 +2123,7 @@ def test_conversion_panel_start_button_runs_fake_executor(monkeypatch):
 
     panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
     panel.set_output_directory("out")
+    _fill_required_task_fields(panel)
     panel.findChild(QSpinBox, "batchWorkersSpinBox").setValue(2)
     panel.findChild(QPushButton, "addTaskButton").click()
     panel.findChild(QPushButton, "startButton").click()
@@ -2093,6 +2169,7 @@ def test_conversion_panel_cancels_pending_and_running_tasks(monkeypatch):
 
     panel.set_input_selection(GuiInputSelection.from_multiple_files(["a.pdf", "b.pdf"]))
     panel.set_output_directory("out")
+    _fill_required_task_fields(panel)
     panel.findChild(QPushButton, "addTaskButton").click()
 
     first_id, second_id = [state.task_id for state in panel.task_view_states()]
