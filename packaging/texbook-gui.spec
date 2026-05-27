@@ -29,7 +29,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="TeXBook",
+    name="texbook",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
