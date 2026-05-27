@@ -310,7 +310,7 @@ def test_build_messages_use_custom_prompt_preset():
         prompt_preset=preset,
     )
 
-    assert base.name == "chinese-math"
+    assert base.name == "math"
     assert "正文系统" in chunk_messages[0]["content"]
     assert "预设额外" in chunk_messages[0]["content"]
     assert "运行额外" in chunk_messages[0]["content"]

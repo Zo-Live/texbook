@@ -12,14 +12,14 @@ from typing import Any
 
 
 PROMPT_PRESET_SCHEMA_VERSION = 1
-DEFAULT_PROMPT_PRESET_NAME = "chinese-math"
+DEFAULT_PROMPT_PRESET_NAME = "math"
 REPOSITORY_PRESET_DIR = Path("config/texbook/presets")
 
 _PRESET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 _HASH_SEPARATORS = (",", ":")
 
 
-SYSTEM_PROMPT = """你是中文数学讲义的 LaTeX 整理助手。
+SYSTEM_PROMPT = """你是数学讲义的 LaTeX 整理助手。
 
 任务：根据 PDF 页面图像和辅助文本识别结果，重建干净、可编译的 LaTeX 正文片段。
 
@@ -40,7 +40,7 @@ SYSTEM_PROMPT = """你是中文数学讲义的 LaTeX 整理助手。
 14. 如果用户消息要求不要单独生成 Beamer 标题页，就不要补写 \\titlepage 或文档级标题命令。
 """
 
-TITLE_SYSTEM_PROMPT = """你是中文数学讲义的标题整理助手。
+TITLE_SYSTEM_PROMPT = """你是数学讲义的标题整理助手。
 
 任务：根据 PDF 文件名、页面文本线索和已生成的 LaTeX 章节线索，生成一个适合作为 LaTeX \\title 的中文标题。
 
@@ -228,7 +228,7 @@ def builtin_prompt_presets() -> dict[str, PromptPreset]:
     """Return all built-in prompt presets."""
     preset = PromptPreset(
         name=DEFAULT_PROMPT_PRESET_NAME,
-        description="中文数学讲义默认预设",
+        description="数学讲义默认预设",
         version="1",
         chunk_system_prompt=SYSTEM_PROMPT,
         chunk_user_template=CHUNK_USER_TEMPLATE,

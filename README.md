@@ -164,7 +164,7 @@ latexmk lecture-project/main.tex
 - `extract --title "..."` 可手动指定单文件标题。
 - `extract` 和 `batch` 都支持 `--title-source filename|llm`；`llm` 会结合文件名、页面 heading、页面开头文本和已生成 LaTeX 章节线索生成标题，失败时退回文件名。
 - 默认生成 `\date{}` 隐藏日期；添加 `--show-date` 会生成 `\date{\today}`。
-- 默认 Prompt 预设是 `chinese-math`，面向中文数学讲义。
+- 默认 Prompt 预设是 `math`，面向数学讲义。
 - `--preset NAME` 可选择内置或仓库本地预设。
 - `--extra-prompt` 会追加到预设自带额外说明之后。
 
@@ -172,9 +172,9 @@ latexmk lecture-project/main.tex
 
 ```bash
 uv run texbook presets list
-uv run texbook presets show chinese-math
-uv run texbook presets add --name chinese-math-lite
-uv run texbook presets add --name chinese-math-lite --from-preset chinese-math --overwrite
+uv run texbook presets show math
+uv run texbook presets add --name math-lite
+uv run texbook presets add --name math-lite --from-preset math --overwrite
 ```
 
 仓库本地预设保存在 `config/texbook/presets/<name>.json`。名称需匹配 `[a-z0-9][a-z0-9_-]{1,63}`，且不能覆盖内置预设。

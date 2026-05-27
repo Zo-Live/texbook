@@ -592,7 +592,7 @@ def presets_add(
     name: Optional[str] = typer.Option(
         None,
         "--name",
-        help="New preset name, e.g. chinese-math-lite",
+        help="New preset name, e.g. math-lite",
     ),
     from_preset: str = typer.Option(
         DEFAULT_PROMPT_PRESET_NAME,
