@@ -128,7 +128,7 @@ export TEXBOOK_BASE_URL="https://your-api.example/v1"
 
 ### 模型与 Prompt
 
-- 默认 Prompt 预设为 `chinese-math`，面向中文数学讲义。
+- 默认 Prompt 预设为 `chinese-math`，面向中文数学讲义、教材或幻灯片。
 - 可以填写自定义预设名。
 - 额外要求会追加到当前 Prompt 后，用于一次性调整转换目标。
 - 支持模型超时、最大 token、temperature、请求重试和退避参数。
@@ -197,7 +197,7 @@ uv run pytest
 uv run ruff check
 ```
 
-真实转换会调用模型服务。验证转换效果时，建议在界面中选择少量页面，避免误处理完整教材。
+真实转换会调用模型服务。验证转换效果时，建议在界面中选择少量页面以节省耗时。
 
 ## 许可证
 
