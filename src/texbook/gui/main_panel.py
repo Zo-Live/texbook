@@ -84,6 +84,7 @@ from texbook.gui.widgets import (
 )
 from texbook.gui.theme import build_fluent_stylesheet
 from texbook.llm.scheduler import ProgressEvent
+from texbook.llm.presets import DEFAULT_PROMPT_PRESET_NAME
 
 
 _INPUT_KIND_ITEMS = (
@@ -468,6 +469,13 @@ class ConversionMainPanel(QWidget):
         self.api_key_source_choices = api_key_source
         self._add_grid_row(grid, "field.key_source", api_key_source)
         grid.add_row("API Key", api_key)
+
+        preset = QLineEdit(panel)
+        preset.setObjectName("promptPresetField")
+        preset.setText(DEFAULT_PROMPT_PRESET_NAME)
+        preset.setReadOnly(True)
+        self.prompt_preset_field = preset
+        self._add_grid_row(grid, "field.prompt_preset", preset)
 
         extra_prompt = QTextEdit(panel)
         extra_prompt.setObjectName("extraPromptEdit")
@@ -1243,6 +1251,7 @@ class ConversionMainPanel(QWidget):
             base_url=self.base_url_field.text(),
             api_key=self.api_key_field.text(),
             api_key_source=self._current_api_key_source(),
+            prompt_preset=DEFAULT_PROMPT_PRESET_NAME,
             extra_prompt=self.extra_prompt_edit.toPlainText(),
             temperature=self.temperature_spin_box.value(),
             timeout_seconds=None if self.timeout_spin_box.value() == 0 else self.timeout_spin_box.value(),
@@ -1286,6 +1295,7 @@ class ConversionMainPanel(QWidget):
         self.base_url_field.setText(settings.base_url)
         self.api_key_field.setText(settings.api_key)
         self.api_key_source_choices.set_value(settings.api_key_source.value)
+        self.prompt_preset_field.setText(DEFAULT_PROMPT_PRESET_NAME)
         self.extra_prompt_edit.setPlainText(settings.extra_prompt)
         self.temperature_spin_box.setValue(settings.temperature)
         self.timeout_spin_box.setValue(0.0 if settings.timeout_seconds is None else settings.timeout_seconds)
