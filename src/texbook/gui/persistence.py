@@ -147,6 +147,7 @@ class GuiSettingsStore:
             base_url=self._read_str("model/base_url", defaults.base_url),
             api_key=self._read_str("model/api_key", defaults.api_key),
             api_key_source=api_key_source,
+            prompt_preset=defaults.prompt_preset,
             extra_prompt=self._read_str("model/extra_prompt", defaults.extra_prompt),
             temperature=self._read_float("model/temperature", defaults.temperature),
             timeout_seconds=self._read_optional_float(

@@ -559,6 +559,7 @@ def test_conversion_panel_exposes_future_task_control_points():
         "baseUrlField",
         "apiKeyField",
         "apiKeySourceChoices",
+        "promptPresetField",
         "extraPromptEdit",
         "cacheEnabledCheckBox",
         "cacheDirectoryField",
@@ -668,7 +669,10 @@ def test_conversion_panel_default_settings_match_cli_defaults():
     assert settings.beamer_box_style == "block"
     assert settings.ctex_font_profile == "default"
     assert panel.validate_settings() == []
-    assert panel.findChild(QLineEdit, "promptPresetField") is None
+    preset_field = panel.findChild(QLineEdit, "promptPresetField")
+    assert preset_field is not None
+    assert preset_field.text() == "math"
+    assert preset_field.isReadOnly() is True
     assert panel.findChild(QLineEdit, "cacheDirectoryField").text() == default_gui_cache_directory()
     assert (
         panel.findChild(QLineEdit, "cacheDirectoryField").placeholderText()
@@ -699,7 +703,7 @@ def test_conversion_panel_settings_round_trip_preserves_all_fields():
             model="vision-model",
             base_url="https://api.example/v1",
             api_key="secret",
-            prompt_preset="math",
+            prompt_preset="custom-old",
             extra_prompt="只提取公式",
             temperature=0.7,
             timeout_seconds=120.0,
@@ -740,6 +744,9 @@ def test_conversion_panel_settings_round_trip_preserves_all_fields():
     assert settings.title_source == "filename"
     assert settings.show_date is True
     assert settings.beamer_title_page is False
+    assert settings.prompt_preset == "math"
+    assert panel.findChild(QLineEdit, "promptPresetField").text() == "math"
+    assert panel.findChild(QLineEdit, "promptPresetField").isReadOnly() is True
     assert settings.model == "vision-model"
     assert settings.base_url == "https://api.example/v1"
     assert settings.api_key == "secret"
@@ -1266,6 +1273,13 @@ def test_conversion_panel_add_task_button_requires_model_key_and_batch_pattern()
     assert add_button.isEnabled() is False
 
     panel.findChild(QLineEdit, "apiKeyField").setText("key")
+    assert add_button.isEnabled() is True
+
+    panel.findChild(QLineEdit, "promptPresetField").setText("")
+    assert panel.current_settings().prompt_preset == "math"
+    assert add_button.isEnabled() is True
+    panel.findChild(QLineEdit, "promptPresetField").setText("custom-old")
+    assert panel.current_settings().prompt_preset == "math"
     assert add_button.isEnabled() is True
 
     _set_choice(panel, "apiKeySourceChoices", GuiApiKeySource.environment.value)
