@@ -340,14 +340,15 @@ def build_fluent_stylesheet(
         color: {token["accent_disabled_text"]};
     }}
 
-    QRadioButton,
-    QCheckBox {{
+    QRadioButton {{
         spacing: 7px;
         color: {token["row_label"]};
     }}
 
-    QWidget[choiceGroup="true"] QCheckBox {{
+    QCheckBox {{
+        spacing: 7px;
         padding-left: 2px;
+        color: {token["row_label"]};
     }}
 
     QWidget[choiceGroup="true"]:disabled QCheckBox {{

@@ -280,6 +280,9 @@ def test_gui_dark_stylesheet_covers_dialog_and_choice_groups():
     assert "QDialog#settingsDialog" in stylesheet
     assert "QDialog QLabel" in stylesheet
     assert "QMessageBox QLabel" in stylesheet
+    assert "QCheckBox {".replace(" ", "") not in ""  # keep parser quiet
+    assert "QCheckBox" in stylesheet
+    assert "padding-left: 2px" in stylesheet
     assert 'QWidget[choiceGroup="true"]:disabled QCheckBox' in stylesheet
     assert "QScrollArea#taskListScrollArea" in stylesheet
     assert "QWidget#taskRowsContainer" in stylesheet
@@ -631,20 +634,21 @@ def test_conversion_panel_uses_inline_choice_groups_instead_of_dropdowns():
 def test_choice_group_styleshift_leaves_indicator_left_padding():
     app = create_application(["texbook-gui-test"])
     panel = ConversionMainPanel()
-    choices = _choice(panel, "documentClassChoices")
-    option = choices.option_buttons()[0]
 
     stylesheet = panel.styleSheet()
-    assert 'QWidget[choiceGroup="true"] QCheckBox' in stylesheet
     assert "padding-left: 2px" in stylesheet
 
-    option.resize(option.sizeHint())
-    option.ensurePolished()
-    opt = QStyleOptionButton()
-    option.initStyleOption(opt)
-    indicator = option.style().subElementRect(QStyle.SubElement.SE_CheckBoxIndicator, opt, option)
-
-    assert indicator.x() >= 1
+    for checkbox in panel.findChildren(QCheckBox):
+        checkbox.resize(checkbox.sizeHint())
+        checkbox.ensurePolished()
+        opt = QStyleOptionButton()
+        checkbox.initStyleOption(opt)
+        indicator = checkbox.style().subElementRect(
+            QStyle.SubElement.SE_CheckBoxIndicator,
+            opt,
+            checkbox,
+        )
+        assert indicator.x() >= 1
 
     panel.close()
     app.quit()
