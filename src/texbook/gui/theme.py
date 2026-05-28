@@ -346,6 +346,10 @@ def build_fluent_stylesheet(
         color: {token["row_label"]};
     }}
 
+    QWidget[choiceGroup="true"] QCheckBox {{
+        padding-left: 2px;
+    }}
+
     QWidget[choiceGroup="true"]:disabled QCheckBox {{
         color: {token["disabled_text"]};
     }}

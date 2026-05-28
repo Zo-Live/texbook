@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (  # noqa: E402
     QProgressBar,
     QScrollArea,
     QPushButton,
+    QStyle,
+    QStyleOptionButton,
     QSpinBox,
     QToolButton,
     QWidget,
@@ -621,6 +623,28 @@ def test_conversion_panel_uses_inline_choice_groups_instead_of_dropdowns():
     assert len(_choice(panel, "documentClassChoices").option_buttons()) == 7
     assert panel.findChildren(ChoiceGrid)
     assert "Combo" not in "".join(child.objectName() for child in panel.findChildren(QWidget))
+
+    panel.close()
+    app.quit()
+
+
+def test_choice_group_styleshift_leaves_indicator_left_padding():
+    app = create_application(["texbook-gui-test"])
+    panel = ConversionMainPanel()
+    choices = _choice(panel, "documentClassChoices")
+    option = choices.option_buttons()[0]
+
+    stylesheet = panel.styleSheet()
+    assert 'QWidget[choiceGroup="true"] QCheckBox' in stylesheet
+    assert "padding-left: 2px" in stylesheet
+
+    option.resize(option.sizeHint())
+    option.ensurePolished()
+    opt = QStyleOptionButton()
+    option.initStyleOption(opt)
+    indicator = option.style().subElementRect(QStyle.SubElement.SE_CheckBoxIndicator, opt, option)
+
+    assert indicator.x() >= 1
 
     panel.close()
     app.quit()
