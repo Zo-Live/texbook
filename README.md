@@ -65,10 +65,13 @@ uv sync --group dev
 使用 PyInstaller 构建桌面应用：
 
 ```bash
+uv run python packaging/build_icon.py
 uv run pyinstaller packaging/texbook-gui.spec
 ```
 
-打包配置使用 `docs/icon.ico` 作为应用图标，产物输出到 PyInstaller 默认的 `dist/` 目录。
+图标集中放在 `assets/`：`icon.svg` 是平滑重绘的矢量源文件，背景圆角半径为边长的 `0.222` 倍，圆角外透明。修改 SVG 后运行 `packaging/build_icon.py`，生成包含 16、20、24、32、40、48、64、96、128 和 256 像素尺寸的 `icon.ico`。
+
+应用窗口和打包配置统一使用 `assets/icon.ico`，并把图标作为运行时资源放入发布包。产物输出到 PyInstaller 默认的 `dist/` 目录。
 
 ## 模型配置
 
@@ -181,9 +184,11 @@ uv run texbook batch input/ -o output/ --log-file "logs/batch.jsonl"
 ├─ .python-version
 ├─ pyproject.toml
 ├─ uv.lock
-├─ docs/
-│  └─ icon.ico                    # 应用图标
+├─ assets/
+│  ├─ icon.svg                    # 圆角矢量图标
+│  └─ icon.ico                    # 多分辨率应用图标
 ├─ packaging/
+│  ├─ build_icon.py               # 从 SVG 生成 ICO
 │  └─ texbook-gui.spec            # PyInstaller 打包入口
 ├─ src/
 │  └─ texbook/

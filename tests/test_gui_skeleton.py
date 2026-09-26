@@ -224,8 +224,8 @@ def _fill_required_task_fields(
     panel.findChild(QLineEdit, "apiKeyField").setText(api_key)
 
 
-def test_icon_resource_resolves_to_docs_icon():
-    assert resolve_app_icon_path() == ROOT / "docs" / "icon.ico"
+def test_icon_resource_resolves_to_assets_icon():
+    assert resolve_app_icon_path() == ROOT / "assets" / "icon.ico"
 
 
 def test_gui_import_does_not_create_qapplication():
@@ -532,8 +532,8 @@ def test_pyinstaller_spec_references_gui_entry_and_icon():
 
     assert "ROOT = Path(SPECPATH).parent" in spec_text
     assert "src\" / \"texbook\" / \"gui\" / \"__main__.py" in spec_text
-    assert "docs\" / \"icon.ico" in spec_text
-    assert "datas=[(str(ICON_PATH), \"docs\")]" in spec_text
+    assert "assets\" / \"icon.ico" in spec_text
+    assert "datas=[(str(ICON_PATH), \"assets\")]" in spec_text
     assert "icon=str(ICON_PATH)" in spec_text
     assert "console=False" in spec_text
 

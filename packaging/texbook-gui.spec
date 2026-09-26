@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(SPECPATH).parent
-ICON_PATH = ROOT / "docs" / "icon.ico"
+ICON_PATH = ROOT / "assets" / "icon.ico"
 ENTRYPOINT = ROOT / "src" / "texbook" / "gui" / "__main__.py"
 
 
@@ -12,7 +12,7 @@ a = Analysis(
     [str(ENTRYPOINT)],
     pathex=[str(ROOT / "src")],
     binaries=[],
-    datas=[(str(ICON_PATH), "docs")],
+    datas=[(str(ICON_PATH), "assets")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
