@@ -9,7 +9,7 @@ from pathlib import Path
 APP_DISPLAY_NAME = "TeXBook"
 APP_ORGANIZATION_NAME = "TeXBook"
 APP_WINDOW_TITLE = "TeXBook PDF 转 LaTeX"
-ICON_RELATIVE_PATH = Path("docs") / "icon.ico"
+ICON_RELATIVE_PATH = Path("assets") / "icon.ico"
 
 
 def _candidate_roots() -> list[Path]:

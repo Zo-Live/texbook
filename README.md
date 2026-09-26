@@ -161,10 +161,13 @@ TeXBook 使用 PyInstaller 生成 Windows GUI 应用。开发环境中可运行�
 
 ```powershell
 uv sync --group dev
+uv run python packaging/build_icon.py
 uv run pyinstaller packaging/texbook-gui.spec
 ```
 
-打包配置使用 `docs/icon.ico` 作为窗口和可执行文件图标，并把图标作为运行时资源放入发布包。发布产物输出到 PyInstaller 默认的 `dist/` 目录。
+图标集中放在 `assets/`：`icon.svg` 是平滑重绘的矢量源文件，背景圆角半径为边长的 `0.222` 倍，圆角外透明；`TeXBook.png` 保留原始重绘参考图。修改 SVG 后运行 `packaging/build_icon.py`，生成包含 16、20、24、32、40、48、64、96、128 和 256 像素尺寸的 `icon.ico`。
+
+打包配置使用 `assets/icon.ico` 作为窗口和可执行文件图标，并把图标作为运行时资源放入发布包。发布产物输出到 PyInstaller 默认的 `dist/` 目录。
 
 ### 项目结构
 
@@ -173,9 +176,12 @@ uv run pyinstaller packaging/texbook-gui.spec
 ├─ pyproject.toml
 ├─ uv.lock
 ├─ README.md
-├─ docs/
-│  └─ icon.ico                    # 应用图标
+├─ assets/
+│  ├─ TeXBook.png                 # 原始重绘参考图
+│  ├─ icon.svg                    # 圆角矢量图标
+│  └─ icon.ico                    # 多分辨率应用图标
 ├─ packaging/
+│  ├─ build_icon.py               # 从 SVG 生成 ICO
 │  └─ texbook-gui.spec            # Windows GUI 打包入口
 ├─ src/
 │  └─ texbook/
