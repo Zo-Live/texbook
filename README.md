@@ -8,7 +8,7 @@ PDF 转 LaTeX 的 Python CLI 工具。它面向数学讲义、教材和幻灯片
 - 可访问的 OpenAI-compatible API，且模型需要支持图片输入
 - 推荐使用 [uv](https://docs.astral.sh/uv/) 管理依赖
 
-TexBook 只安装 PDF 转 LaTeX 工具本身。生成的 `.tex` 默认会先判断适合的 LaTeX 文档类，并使用 `ctexart`、`ctexbook` 或 `ctexbeamer` 等外壳及常用数学宏包；如果需要在本地编译生成结果，请自行准备 TeX Live、`xelatex` 和 `latexmk`。
+TexBook 只安装 PDF 转 LaTeX 工具本身。生成的 `.tex` 默认会先判断适合的 LaTeX 文档类，并使用 `ctexart`、`ctexbook` 或 `ctexbeamer` 等外壳及常用数学宏包。
 
 ## 安装
 
@@ -144,27 +144,6 @@ uv run texbook extract "input/lecture.pdf" -o "output/lecture.tex" --log-file "l
 uv run texbook batch input/ -o output/ --log-file "logs/batch.jsonl"
 ```
 
-## 本地编译
-
-如果本地存在 `.latexmkrc`、`src/.latexmkrc` 和 `scripts/post-build.sh`，可以从仓库根目录运行：
-
-```bash
-latexmk src/test.tex
-latexmk "src/lecture 1.tex"
-latexmk src/lecture-project/main.tex
-```
-
-也可以进入 `src/` 后运行：
-
-```bash
-cd src
-latexmk test.tex
-latexmk "lecture 1.tex"
-latexmk lecture-project/main.tex
-```
-
-本地 `.latexmkrc` 使用 `xelatex`，把最终 PDF 输出到 `out/` 根部，把辅助产物输出或归位到 `build/<产物名>/`。普通单文件入口使用文件 stem 作为产物名，例如 `src/test.tex` 生成 `out/test.pdf` 与 `build/test/`；目录化项目入口 `src/lecture-project/main.tex` 使用直接父目录名作为产物名，生成 `out/lecture-project.pdf` 与 `build/lecture-project/`。这些目录默认不进入 Git。
-
 ## 标题、日期和 Prompt 预设
 
 - 默认使用 PDF 文件名作为 `\title{}`。
@@ -257,8 +236,7 @@ uv run texbook presets add --name math-lite --from-preset math --overwrite
 
 - `input/`、`docs/`：可放置待转换 PDF，默认不进入 Git。
 - `output/`、`src/*.tex`：可放置生成的 `.tex`，默认不进入 Git。
-- `build/`：默认缓存目录和本地编译辅助产物目录，默认不进入 Git。
-- `out/`：本地编译最终 PDF 输出目录，默认不进入 Git。
+- `build/`：默认缓存目录，默认不进入 Git。
 
 ## 开发
 
@@ -272,7 +250,6 @@ uv run ruff check
 
 ```bash
 uv run texbook extract "docs/6.1 集合与映射.pdf" --project --structure off --pages 7 -o "stage9-smoke" --force
-latexmk src/stage9-smoke/main.tex
 ```
 
 ## 许可证
